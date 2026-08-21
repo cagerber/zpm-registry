@@ -327,9 +327,19 @@ ClassMethod AdminPublishPackage() As %Status
   If $$$ISERR(tSC) Return ..ReportHttpStatusCode(..#HTTP500INTERNALSERVERERROR, tSC)
   If $IsObject(tRes.GetAt(1)) Set description = tRes.GetAt(1).Value
   Set keywords = ""
-  Set tSC = tDocument.EvaluateExpression("/Export/Document/Module/Keywords", "text()", .tRes)
+  Set tSC = tDocument.EvaluateExpression("/Export/Document/Module/Keywords/Keyword", "text()", .tRes)
   If $$$ISERR(tSC) Return ..ReportHttpStatusCode(..#HTTP500INTERNALSERVERERROR, tSC)
-  If $IsObject(tRes.GetAt(1)) Set keywords = tRes.GetAt(1).Value
+  If tRes.Count() > 0 {
+    For i=1:1:tRes.Count() {
+      Set kw = $ZStrip(tRes.GetAt(i).Value, "<>W")
+      If kw '= "" Set keywords = keywords _ $Select(keywords="":"",1:",") _ kw
+    }
+  }
+  If keywords = "" {
+    Set tSC = tDocument.EvaluateExpression("/Export/Document/Module/Keywords", "text()", .tRes)
+    If $$$ISERR(tSC) Return ..ReportHttpStatusCode(..#HTTP500INTERNALSERVERERROR, tSC)
+    If $IsObject(tRes.GetAt(1)) Set keywords = tRes.GetAt(1).Value
+  }
   Do ##class(ZPM.Package).DeleteExistingPackages(name, version)
   Set package = ##class(ZPM.Package).%New()
   Set package.name = name
