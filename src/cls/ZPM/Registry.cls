@@ -295,9 +295,7 @@ ClassMethod AdminPublishPackage() As %Status
 {
   Set tSC = ..CheckAdminToken()
   If $$$ISERR(tSC) Return ..ReportHttpStatusCode(..#HTTP401UNAUTHORIZED, tSC)
-  Set body = %request.Content.Read()
-  Set jo = {}.%FromJSON(body)
-  Set src = jo.path
+  Set src = %request.Content.%Get("path")
   If src = "" {
     Return ..ReportHttpStatusCode(..#HTTP400BADREQUEST, $$$ERROR(5001,"body {""path"": ""<tgz-or-unpacked-dir>""} required"))
   }
@@ -342,9 +340,7 @@ ClassMethod AdminSetKeywords(pkg As %String = "", version As %String = "") As %S
 {
   Set tSC = ..CheckAdminToken()
   If $$$ISERR(tSC) Return ..ReportHttpStatusCode(..#HTTP401UNAUTHORIZED, tSC)
-  Set body = %request.Content.Read()
-  Set jo = {}.%FromJSON(body)
-  Set keywords = jo.keywords
+  Set keywords = %request.Content.%Get("keywords")
   If keywords = "" {
     Return ..ReportHttpStatusCode(..#HTTP400BADREQUEST, $$$ERROR(5001,"body {""keywords"": ""a,b,c""} required"))
   }
