@@ -450,6 +450,12 @@ ClassMethod LoadPackage(Path As %String, repository As %String = "", silent As %
   Set package.package = archive
   Set module = ##class(%Stream.FileCharacter).%New()
   Set module.Filename = moduleFile
+  // Trifour fork (9-373): module.xml is UTF-8 — bind the file stream with the
+  // UTF8 translate table, otherwise the default (ANSI/CP1252 on Windows) reads
+  // non-ASCII bytes (e.g. em-dash E2 80 94) as mojibake characters and re-encodes
+  // them to illegal-in-XML C1 control chars (U+0080/U+0094) on %Save, breaking
+  // the zpm client's manifest parse ("Download package manifest failed").
+  Set module.TranslateTable = "UTF8"
   Set package.manifest = module
   Set hash = $$$lcase(##class(%File).SHA1Hash(archiveFileName, 1))  
   Set package.hash = hash
