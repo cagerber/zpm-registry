@@ -402,6 +402,16 @@ ClassMethod LoadPackage(Path As %String, repository As %String = "", silent As %
     Set description = tRes.GetAt(1).Value
   }
 
+  // Trifour fork (9-373): persist module.xml <Keywords> on the record so
+  // package metadata (incl. our sha256 content marker) survives LoadPackage
+  // and is exposed by the %JSON.Adaptor listing.
+  Set keywords = ""
+  Set tSC=tDocument.EvaluateExpression("/Export/Document/Module/Keywords", "text()", .tRes)
+  If $$$ISERR(tSC) Return tSC
+  If $IsObject(tRes.GetAt(1)) {
+    Set keywords = tRes.GetAt(1).Value
+  }
+
   Set archive = ##class(%Stream.FileBinary).%New()
   Set archiveFileName = ##class(%File).TempFilename("tgz")
   Set archive.Filename = archiveFileName
@@ -418,6 +428,13 @@ ClassMethod LoadPackage(Path As %String, repository As %String = "", silent As %
   Set package = ..%New()
   Set package.name = name
   Set package.description = description
+  Set keywords = $ZStrip(keywords,"<>W")
+  If keywords '= "" {
+    For i=1:1:$Length(keywords,",") {
+      Set kw = $ZStrip($Piece(keywords,",",i),"<>W")
+      If kw '= "" Do package.keywords.Insert(kw)
+    }
+  }
   Set package.repository = repository
   Set package.version = version
   Set package.package = archive
