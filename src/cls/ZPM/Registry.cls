@@ -37,6 +37,14 @@ XData UrlMap [ XMLNamespace = "http://www.intersystems.com/urlmap" ]
   <!-- Unpublish Package -->
   <Route Url="/packages/:package/:version" Method="Delete" Call="UnPublishPackageVersion" Cors="true" />
 
+  <!-- Trifour admin API (9-373): token-authed; runs on the same /registry app
+       so it survives the IIS Anonymous front (only the Authorization header is
+       consumed there — custom X-Registry-Token headers pass through). -->
+  <Route Url="/admin/status" Method="GET" Call="AdminStatus" Cors="true" />
+  <Route Url="/admin/packages/:package/:version/keywords" Method="POST" Call="AdminSetKeywords" Cors="true" />
+  <Route Url="/admin/packages" Method="POST" Call="AdminPublishPackage" Cors="true" />
+  <Route Url="/admin/packages/:package/:version" Method="Delete" Call="AdminUnpublishPackageVersion" Cors="true" />
+
   <!-- Package Archive -->
   <Route Url="/download/:package/:platformVersion/:file" Method="GET" Call="GetArchive" Cors="true" />
   <!-- <Route Url="/download/:package/-/:file" Method="GET" Call="GetArchive" Cors="true" /> -->
@@ -241,6 +249,119 @@ ClassMethod UnPublishPackageVersion(pkg As %String = "", version As %String = ""
     }
     Return ##class(ZPM.Package).DeletePackageVersion(pkg, version)
   }
+}
+
+/// Trifour admin API (9-373). Token from zpm-registry.yaml ``admin-token``;
+/// sent as ``X-Registry-Token`` header (IIS Anonymous consumes only the
+/// Authorization header, so custom headers reach IRIS untouched).
+ClassMethod CheckAdminToken() As %Status
+{
+  Set settings = ##class(ZPM.Settings).%New()
+  Set expected = ""
+  If settings.Exists, settings.JSON.%IsDefined("admin-token") {
+    Set expected = settings.JSON."admin-token"
+  }
+  If expected = "" {
+    Return $$$ERROR($$$GeneralError, "admin token not configured (zpm-registry.yaml admin-token)")
+  }
+  Set provided = %request.GetCgiEnv("HTTP_X_REGISTRY_TOKEN")
+  If provided = "" {
+    Set provided = %request.Get("token")
+  }
+  If provided = "" {
+    Return $$$ERROR($$$GeneralError, "admin token required (X-Registry-Token header)")
+  }
+  // hash-compare both sides: no timing signal on length or content
+  If $SYSTEM.Encryption.SHA1Hash(provided) '= $SYSTEM.Encryption.SHA1Hash(expected) {
+    Return $$$ERROR($$$GeneralError, "invalid admin token")
+  }
+  Return $$$OK
+}
+
+ClassMethod AdminStatus() As %Status
+{
+  Set tSC = ..CheckAdminToken()
+  If $$$ISERR(tSC) Return ..ReportHttpStatusCode(..#HTTP401UNAUTHORIZED, tSC)
+  Set payload = {
+    "status": "ok",
+    "version": (..#VERSION),
+    "user": ($Username),
+    "namespace": ($NAMESPACE)
+  }
+  Return ..%ProcessResult($$$OK, payload)
+}
+
+ClassMethod AdminPublishPackage() As %Status
+{
+  Set tSC = ..CheckAdminToken()
+  If $$$ISERR(tSC) Return ..ReportHttpStatusCode(..#HTTP401UNAUTHORIZED, tSC)
+  Set body = %request.Content.Read()
+  Set jo = {}.%FromJSON(body)
+  Set src = jo.path
+  If src = "" {
+    Return ..ReportHttpStatusCode(..#HTTP400BADREQUEST, $$$ERROR(5001,"body {""path"": ""<tgz-or-unpacked-dir>""} required"))
+  }
+  Set pkgPath = src
+  If $Extract(src, *-3, *) = ".tgz" {
+    Set tmp = ##class(%File).TempDirectory() _ "registry_admin_load_" _ $JOB _ "_" _ $Random(99999)
+    Do ##class(%File).CreateDirectoryChain(tmp)
+    Set tSC = $zf(-100, "", "tar", "-zxf", src, "-C", tmp)
+    If tSC '= 0 {
+      Return ..ReportHttpStatusCode(..#HTTP400BADREQUEST, $$$ERROR(5001,"tar extraction failed for "_src))
+    }
+    Set pkgPath = tmp
+  }
+  Set tSC = ##class(ZPM.Package).LoadPackage(pkgPath, "", 1)
+  If $$$ISERR(tSC) {
+    Return ..ReportHttpStatusCode(..#HTTP500INTERNALSERVERERROR, tSC)
+  }
+  Return ..%ProcessResult($$$OK, {"loaded": (src)})
+}
+
+ClassMethod AdminUnpublishPackageVersion(pkg As %String = "", version As %String = "") As %Status
+{
+  Set tSC = ..CheckAdminToken()
+  If $$$ISERR(tSC) Return ..ReportHttpStatusCode(..#HTTP401UNAUTHORIZED, tSC)
+  Set settingsFile = ##class(ZPM.Settings).%New()
+  If ('settingsFile.GetDeleteEnable()) {
+    Return ..ReportHttpStatusCode(..#HTTP403FORBIDDEN, $$$ERROR(5001,"Delete not allowed for this registry"))
+  }
+  Set pkg = $$$lcase(pkg)
+  Set pPackage = ##class(ZPM.Package).NameVersionOpen(pkg, version)
+  If ('$IsObject(pPackage)) {
+    Return ..ReportHttpStatusCode(..#HTTP404NOTFOUND)
+  }
+  Set tSC = ##class(ZPM.Package).DeletePackageVersion(pkg, version)
+  If tSC '= 1 {
+    Return ..ReportHttpStatusCode(..#HTTP500INTERNALSERVERERROR, $$$ERROR(5001,"delete failed for "_pkg_"@"_version))
+  }
+  Return ..%ProcessResult($$$OK, {"deleted": (pkg _ "@" _ version)})
+}
+
+ClassMethod AdminSetKeywords(pkg As %String = "", version As %String = "") As %Status
+{
+  Set tSC = ..CheckAdminToken()
+  If $$$ISERR(tSC) Return ..ReportHttpStatusCode(..#HTTP401UNAUTHORIZED, tSC)
+  Set body = %request.Content.Read()
+  Set jo = {}.%FromJSON(body)
+  Set keywords = jo.keywords
+  If keywords = "" {
+    Return ..ReportHttpStatusCode(..#HTTP400BADREQUEST, $$$ERROR(5001,"body {""keywords"": ""a,b,c""} required"))
+  }
+  Set pPackage = ##class(ZPM.Package).NameVersionOpen($$$lcase(pkg), version)
+  If ('$IsObject(pPackage)) {
+    Return ..ReportHttpStatusCode(..#HTTP404NOTFOUND)
+  }
+  Do pPackage.keywords.Clear()
+  For i=1:1:$Length(keywords,",") {
+    Set kw = $ZStrip($Piece(keywords,",",i),"<>W")
+    If kw '= "" Do pPackage.keywords.Insert(kw)
+  }
+  Set tSC = pPackage.%Save()
+  If $$$ISERR(tSC) {
+    Return ..ReportHttpStatusCode(..#HTTP500INTERNALSERVERERROR, tSC)
+  }
+  Return ..%ProcessResult($$$OK, {"package": (pkg _ "@" _ version), "keywords": (keywords)})
 }
 
 ClassMethod PublishPackage() As %Status
