@@ -313,12 +313,12 @@ ClassMethod AdminPublishPackage() As %Status
   Set tSC = ##class(%XML.XPATH.Document).CreateFromFile(moduleFile, .tDocument)
   If $$$ISERR(tSC) Return ..ReportHttpStatusCode(..#HTTP500INTERNALSERVERERROR, tSC)
   Set tSC = tDocument.EvaluateExpression("/Export/Document/Module/Name", "text()", .tRes)
-  If $$$ISERR(tSC) Or '$IsObject(tRes.GetAt(1)) {
+  If $$$ISERR(tSC) || '$IsObject(tRes.GetAt(1)) {
     Return ..ReportHttpStatusCode(..#HTTP400BADREQUEST, $$$ERROR(5001,"module.xml Name required"))
   }
   Set name = $$$lcase(tRes.GetAt(1).Value)
   Set tSC = tDocument.EvaluateExpression("/Export/Document/Module/Version", "text()", .tRes)
-  If $$$ISERR(tSC) Or '$IsObject(tRes.GetAt(1)) {
+  If $$$ISERR(tSC) || '$IsObject(tRes.GetAt(1)) {
     Return ..ReportHttpStatusCode(..#HTTP400BADREQUEST, $$$ERROR(5001,"module.xml Version required"))
   }
   Set version = tRes.GetAt(1).Value
