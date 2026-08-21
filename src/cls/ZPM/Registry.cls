@@ -301,7 +301,7 @@ ClassMethod AdminPublishPackage() As %Status
   }
   Set pkgPath = src
   If $Extract(src, *-3, *) = ".tgz" {
-    Set tmp = ##class(%File).TempDirectory() _ "registry_admin_load_" _ $JOB _ "_" _ $Random(99999)
+    Set tmp = ##class(%SYS.System).TempDirectory() _ "registry_admin_load_" _ $JOB _ "_" _ $Random(99999)
     Do ##class(%File).CreateDirectoryChain(tmp)
     Set tSC = $zf(-100, "", "tar", "-zxf", src, "-C", tmp)
     If tSC '= 0 {
