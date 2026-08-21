@@ -297,19 +297,9 @@ ClassMethod AdminPublishPackage() As %Status
   If $$$ISERR(tSC) Return ..ReportHttpStatusCode(..#HTTP401UNAUTHORIZED, tSC)
   Set src = %request.Content.%Get("path")
   If src = "" {
-    Return ..ReportHttpStatusCode(..#HTTP400BADREQUEST, $$$ERROR(5001,"body {""path"": ""<tgz-or-unpacked-dir>""} required"))
+    Return ..ReportHttpStatusCode(..#HTTP400BADREQUEST, $$$ERROR(5001,"body {""path"": ""<unpacked-module-dir>""} required"))
   }
-  Set pkgPath = src
-  If $Extract(src, *-3, *) = ".tgz" {
-    Set tmp = ##class(%SYS.System).TempDirectory() _ "registry_admin_load_" _ $JOB _ "_" _ $Random(99999)
-    Do ##class(%File).CreateDirectoryChain(tmp)
-    Set tSC = $zf(-100, "", "tar", "-zxf", src, "-C", tmp)
-    If tSC '= 0 {
-      Return ..ReportHttpStatusCode(..#HTTP400BADREQUEST, $$$ERROR(5001,"tar extraction failed for "_src))
-    }
-    Set pkgPath = tmp
-  }
-  Set tSC = ##class(ZPM.Package).LoadPackage(pkgPath, "", 1)
+  Set tSC = ##class(ZPM.Package).LoadPackage(src, "", 1)
   If $$$ISERR(tSC) {
     Return ..ReportHttpStatusCode(..#HTTP500INTERNALSERVERERROR, tSC)
   }
