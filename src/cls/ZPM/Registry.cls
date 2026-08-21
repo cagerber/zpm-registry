@@ -295,15 +295,65 @@ ClassMethod AdminPublishPackage() As %Status
 {
   Set tSC = ..CheckAdminToken()
   If $$$ISERR(tSC) Return ..ReportHttpStatusCode(..#HTTP401UNAUTHORIZED, tSC)
+  // CSP worker processes cannot run $zf (LoadPackage re-tars via $zf), so the
+  // ingest is replicated here without $zf: parse module.xml from the unpacked
+  // dir, use the already-uploaded tgz as the archive stream.
   Set src = %request.Content.%Get("path")
+  Set archivePath = %request.Content.%Get("archive")
   If src = "" {
-    Return ..ReportHttpStatusCode(..#HTTP400BADREQUEST, $$$ERROR(5001,"body {""path"": ""<unpacked-module-dir>""} required"))
+    Return ..ReportHttpStatusCode(..#HTTP400BADREQUEST, $$$ERROR(5001,"body {""path"": ""<unpacked-module-dir>"", ""archive"": ""<tgz-path>""} required"))
   }
-  Set tSC = ##class(ZPM.Package).LoadPackage(src, "", 1)
+  If archivePath = "" {
+    Return ..ReportHttpStatusCode(..#HTTP400BADREQUEST, $$$ERROR(5001,"archive path required (CSP process cannot run $zf tar)"))
+  }
+  Set moduleFile = ##class(%File).NormalizeFilename("module.xml", src)
+  If '##class(%File).Exists(moduleFile) {
+    Return ..ReportHttpStatusCode(..#HTTP400BADREQUEST, $$$ERROR(5001,"module.xml not found under "_src))
+  }
+  Set tSC = ##class(%XML.XPATH.Document).CreateFromFile(moduleFile, .tDocument)
+  If $$$ISERR(tSC) Return ..ReportHttpStatusCode(..#HTTP500INTERNALSERVERERROR, tSC)
+  Set tSC = tDocument.EvaluateExpression("/Export/Document/Module/Name", "text()", .tRes)
+  If $$$ISERR(tSC) Or '$IsObject(tRes.GetAt(1)) {
+    Return ..ReportHttpStatusCode(..#HTTP400BADREQUEST, $$$ERROR(5001,"module.xml Name required"))
+  }
+  Set name = $$$lcase(tRes.GetAt(1).Value)
+  Set tSC = tDocument.EvaluateExpression("/Export/Document/Module/Version", "text()", .tRes)
+  If $$$ISERR(tSC) Or '$IsObject(tRes.GetAt(1)) {
+    Return ..ReportHttpStatusCode(..#HTTP400BADREQUEST, $$$ERROR(5001,"module.xml Version required"))
+  }
+  Set version = tRes.GetAt(1).Value
+  Set description = ""
+  Set tSC = tDocument.EvaluateExpression("/Export/Document/Module/Description", "text()", .tRes)
+  If $$$ISERR(tSC) Return ..ReportHttpStatusCode(..#HTTP500INTERNALSERVERERROR, tSC)
+  If $IsObject(tRes.GetAt(1)) Set description = tRes.GetAt(1).Value
+  Set keywords = ""
+  Set tSC = tDocument.EvaluateExpression("/Export/Document/Module/Keywords", "text()", .tRes)
+  If $$$ISERR(tSC) Return ..ReportHttpStatusCode(..#HTTP500INTERNALSERVERERROR, tSC)
+  If $IsObject(tRes.GetAt(1)) Set keywords = tRes.GetAt(1).Value
+  Do ##class(ZPM.Package).DeleteExistingPackages(name, version)
+  Set package = ##class(ZPM.Package).%New()
+  Set package.name = name
+  Set package.description = description
+  Set keywords = $ZStrip(keywords,"<>W")
+  If keywords '= "" {
+    For i=1:1:$Length(keywords,",") {
+      Set kw = $ZStrip($Piece(keywords,",",i),"<>W")
+      If kw '= "" Do package.keywords.Insert(kw)
+    }
+  }
+  Set package.version = version
+  Set archive = ##class(%Stream.FileBinary).%New()
+  Set archive.Filename = archivePath
+  Set package.package = archive
+  Set module = ##class(%Stream.FileCharacter).%New()
+  Set module.Filename = moduleFile
+  Set package.manifest = module
+  Set package.hash = $$$lcase(##class(%File).SHA1Hash(archivePath, 1))
+  Set tSC = package.%Save()
   If $$$ISERR(tSC) {
     Return ..ReportHttpStatusCode(..#HTTP500INTERNALSERVERERROR, tSC)
   }
-  Return ..%ProcessResult($$$OK, {"loaded": (src)})
+  Return ..%ProcessResult($$$OK, {"name": (name), "version": (version), "keywords": (keywords)})
 }
 
 ClassMethod AdminUnpublishPackageVersion(pkg As %String = "", version As %String = "") As %Status
