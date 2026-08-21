@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Export generator="Cache" version="25">
-  <Document name="zpm-registry.ZPM">
+  <Document name="trifour-zpm-registry.ZPM">
     <Module>
-      <Name>zpm-registry</Name>
+      <Name>trifour-zpm-registry</Name>
       <ExternalName>ZPM Registry</ExternalName>
       <Description>Registry server for ZPM</Description>
       <Version>1.3.5</Version>

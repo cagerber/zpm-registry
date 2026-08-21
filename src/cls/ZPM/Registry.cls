@@ -66,7 +66,7 @@ ClassMethod GetInfo() As %Status
 {
   Set version = ..#VERSION
   If $System.CLS.IsMthd("%ZPM.PackageManager.Developer.Module", "NameOpen") {
-    Set zpmModule = ##class(%ZPM.PackageManager.Developer.Module).NameOpen("zpm-registry")
+    Set zpmModule = ##class(%ZPM.PackageManager.Developer.Module).NameOpen("trifour-zpm-registry")
     If $IsObject(zpmModule) {
       Set version = zpmModule.VersionString
     }
