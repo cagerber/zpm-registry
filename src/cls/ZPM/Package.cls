@@ -465,6 +465,110 @@ ClassMethod LoadPackage(Path As %String, repository As %String = "", silent As %
   Return package.%Save()
 }
 
+/// Trifour fork (dep-97): ingest a package from the ORIGINAL archive plus its
+/// module.xml — no untar and no re-tar.
+///
+/// The stock <method>LoadPackage</method> re-tars an unpacked directory via
+/// <code>$zf(-100)</code>. That forces a client-side unpack first, duplicates
+/// an archive we already hold, and makes the stored <property>hash</property> a
+/// SHA1 of the re-tarred bytes — so it can never identify the uploaded .tgz.
+/// This method stores the supplied archive stream as-is, so <property>hash</property>
+/// is a genuine digest of the artifact the client produced, and no temporary
+/// directory or tar process is needed.
+///
+/// <var>manifestPath</var> is the module.xml that belongs to <var>archivePath</var>
+/// (the same file the archive contains), supplied separately so the caller never
+/// has to unpack.
+///
+/// @param archivePath IRIS-visible path to the original .tgz
+/// @param manifestPath IRIS-visible path to that package's module.xml
+/// @param repository Optional repository marker persisted on the record
+/// @param silent Suppress progress output
+/// @param name Output: lower-cased package name from module.xml
+/// @param version Output: package version from module.xml
+/// @return %Status
+ClassMethod LoadPackageFromArchive(archivePath As %String, manifestPath As %String, repository As %String = "", silent As %Boolean = 0, Output name As %String, Output version As %String) As %Status
+{
+  If '##class(%File).Exists(archivePath) {
+    Return $$$ERROR($$$GeneralError, "archive not found: " _ archivePath)
+  }
+  If '##class(%File).Exists(manifestPath) {
+    Return $$$ERROR($$$GeneralError, "module.xml not found: " _ manifestPath)
+  }
+  If ('silent) {
+    Write !!,"Archive: ", archivePath
+    Write !!,"ModuleFile: ", manifestPath
+  }
+  Set tSC = ##class(%XML.XPATH.Document).CreateFromFile(manifestPath, .tDocument)
+  If $$$ISERR(tSC) Return tSC
+
+  Set tSC=tDocument.EvaluateExpression("/Export/Document/Module/Name", "text()", .tRes)
+  If $$$ISERR(tSC) Return tSC
+  If '$IsObject(tRes.GetAt(1)) {
+    Return $$$ERROR($$$GeneralError, "Name required")
+  }
+  Set name = $$$lcase(tRes.GetAt(1).Value)
+
+  Set tSC=tDocument.EvaluateExpression("/Export/Document/Module/Version", "text()", .tRes)
+  If $$$ISERR(tSC) Return tSC
+  If '$IsObject(tRes.GetAt(1)) {
+    Return $$$ERROR($$$GeneralError, "Version required")
+  }
+  Set version = tRes.GetAt(1).Value
+
+  Set description = ""
+  Set tSC=tDocument.EvaluateExpression("/Export/Document/Module/Description", "text()", .tRes)
+  If $$$ISERR(tSC) Return tSC
+  If $IsObject(tRes.GetAt(1)) {
+    Set description = tRes.GetAt(1).Value
+  }
+
+  // Same <Keywords> handling as LoadPackage (Trifour fork, 9-373).
+  Set keywords = ""
+  Set tSC=tDocument.EvaluateExpression("/Export/Document/Module/Keywords/Keyword", "text()", .tRes)
+  If $$$ISERR(tSC) Return tSC
+  If tRes.Count() > 0 {
+    For i=1:1:tRes.Count() {
+      Set kw = $ZStrip(tRes.GetAt(i).Value, "<>W")
+      If kw '= "" Set keywords = keywords _ $Select(keywords="":"",1:",") _ kw
+    }
+  }
+  If keywords = "" {
+    Set tSC=tDocument.EvaluateExpression("/Export/Document/Module/Keywords", "text()", .tRes)
+    If $$$ISERR(tSC) Return tSC
+    If $IsObject(tRes.GetAt(1)) Set keywords = tRes.GetAt(1).Value
+  }
+
+  Do ..DeleteExistingPackages(name,version)
+  Set package = ..%New()
+  Set package.name = name
+  Set package.description = description
+  Set keywords = $ZStrip(keywords,"<>W")
+  If keywords '= "" {
+    For i=1:1:$Length(keywords,",") {
+      Set kw = $ZStrip($Piece(keywords,",",i),"<>W")
+      If kw '= "" Do package.keywords.Insert(kw)
+    }
+  }
+  Set package.repository = repository
+  Set package.version = version
+  // The archive is stored exactly as supplied — no $zf tar round-trip.
+  Set archive = ##class(%Stream.FileBinary).%New()
+  Set archive.Filename = archivePath
+  Set package.package = archive
+  Set module = ##class(%Stream.FileCharacter).%New()
+  Set module.Filename = manifestPath
+  Set module.TranslateTable = "UTF8"
+  Set package.manifest = module
+  Set hash = $$$lcase(##class(%File).SHA1Hash(archivePath, 1))
+  Set package.hash = hash
+  If ('silent) {
+    Write !,"ArchiveSize: " _ archive.Size
+    Write !,"ArchiveHash: " _ hash
+  }
+  Return package.%Save()
+}
+
 ClassMethod GetPackageNameFromRepositoryURL(url As %String) As %String
 {
   Return $Piece(url, "/", *-1)
