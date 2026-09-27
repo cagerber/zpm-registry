@@ -1,9 +1,20 @@
 Class ZPM.Package Extends (%Persistent, %JSON.Adaptor)
 {
 
-Parameter EXTENTQUERYSPEC = "name,version";
+Parameter EXTENTQUERYSPEC = "name,channel,version";
 
 Parameter %JSONIGNOREINVALIDFIELD As BOOLEAN = 1;
+
+/// The release channel this artefact was published into.
+///
+/// ONE registry hosts every channel, so the channel is part of the package identity:
+/// the same module@version may legitimately exist in `develop` and in `sprint` without
+/// either shadowing the other, and a lookup that does not name a channel is ambiguous.
+/// Decided by the estate-release programme (D3): a channel is a feed, and it is NOT
+/// encoded in the module name or the version.
+Property channel As %String(MAXLEN = 20) [ Required ];
+
+Index Channel On channel;
 
 Property name As %String(MAXLEN = 50) [ Required ];
 
@@ -11,7 +22,7 @@ Index Name On name;
 
 Property version As %String [ Required ];
 
-Index NameVersion On (name, version) [ IdKey, Unique ];
+Index NameChannelVersion On (name, channel, version) [ IdKey, Unique ];
 
 Property owner As %String(%JSONINCLUDE = "NONE");
 
@@ -169,12 +180,21 @@ Method versionsGet() As %ListOfDataTypes
   Return tList
 }
 
-ClassMethod VersionFind(pkg As %String = "", version As %String = "", pPrerelease As %Boolean = 1, pSnapshot As %Boolean = 1) As %String
+ClassMethod VersionFind(pkg As %String = "", version As %String = "", pPrerelease As %Boolean = 1, pSnapshot As %Boolean = 1, channel As %String = "") As %String
 {
+  // ONE registry hosts every channel, so a lookup that does not name a channel is
+  // ambiguous: the same module@version may exist in `develop` and in `sprint`. Refuse
+  // rather than guess — a wrong answer here would install another channel's build.
+  If (channel = "") { Return "" }
+  // Reserved channel for packages MIRRORED from an upstream registry (UpLink proxies).
+  // Deliberately not one of the four release channels, so a community mirror can never
+  // be mistaken for a release-channel build of the same module@version.
+  Set mirrorChannel = "uplink"
   If (version = "") || (version = "latest") || (version = "*") {
     // package was published directly in this registry - return the last version
     &sql(SELECT TOP 1 Version INTO :version FROM ZPM.Package 
         WHERE Name = :pkg 
+          AND channel = :channel
           AND UpLink IS NULL
           AND (
             versionPrerelease IS NULL 
@@ -187,10 +207,11 @@ ClassMethod VersionFind(pkg As %String = "", version As %String = "", pPrereleas
       // found 
       Return version
     } Else {
-      // find the latest version in UpLinks 
+      // Nothing in the requested channel — fall back to the MIRROR.
       Do ##class(ZPM.UpLink).LoadPackageFromAllUpLinks(pkg, "latest")
       &sql(SELECT TOP 1 Version INTO :version FROM ZPM.Package 
           WHERE Name = :pkg 
+            AND channel = :mirrorChannel
             AND (
               versionPrerelease IS NULL 
               OR (:pSnapshot = 1 AND LOWER(versionPrerelease) = 'snapshot')
@@ -199,8 +220,7 @@ ClassMethod VersionFind(pkg As %String = "", version As %String = "", pPrereleas
           ORDER BY versionMajor DESC, versionMinor DESC, versionPatch DESC, versionPrerelease DESC, versionBuildmetadata DESC
       )
       If SQLCODE=0 { 
-        // if manifest doesn''t exists - find in uplinks
-        Set package = ##class(ZPM.Package).%OpenId(pkg_"||"_version)
+        Set package = ##class(ZPM.Package).%OpenId(pkg_"||"_mirrorChannel_"||"_version)
         If ('$IsObject(package)) { Return ""}
         If (package.manifest.Size) { Return version }
         Do ##class(ZPM.UpLink).LoadPackageFromAllUpLinks(pkg, version)
@@ -209,23 +229,17 @@ ClassMethod VersionFind(pkg As %String = "", version As %String = "", pPrereleas
       Return ""
     }
   } Else {
-    If ( ##class(ZPM.Package).NameUpLinkExists(pkg, "") ) {
-      If ..%ExistsId(pkg _ "||" _ version) {
-        Return version
-      } 
-      Return ""
-    } Else {
-      If ..%ExistsId(pkg _ "||" _ version) {
-        Set package = ##class(ZPM.Package).%OpenId(pkg_"||"_version)
-        If ('$IsObject(package)) { Return ""}
-        If (package.manifest.Size) { Return version }
-      } 
-      Do ##class(ZPM.UpLink).LoadPackageFromAllUpLinks(pkg, version)
-      If ..%ExistsId(pkg _ "||" _ version) {
-        Return version
-      }
-      Return ""
+    // Exact version: the requested channel first, then the mirror.
+    If ..%ExistsId(pkg _ "||" _ channel _ "||" _ version) {
+      Set package = ##class(ZPM.Package).%OpenId(pkg_"||"_channel_"||"_version)
+      If ('$IsObject(package)) { Return ""}
+      If (package.manifest.Size) { Return version }
+    } 
+    Do ##class(ZPM.UpLink).LoadPackageFromAllUpLinks(pkg, version)
+    If ..%ExistsId(pkg _ "||" _ mirrorChannel _ "||" _ version) {
+      Return version
     }
+    Return ""
   }
 }
 
@@ -240,9 +254,9 @@ Trigger DeletePackageTrigger [ Event = DELETE, Foreach = row/object ]
   &sql(DELETE FROM ZPM.DeployedPackage WHERE name = :name AND version = :version)
 }
 
-ClassMethod MarkAsDeleted(name, version) As %Boolean
+ClassMethod MarkAsDeleted(name, version, channel) As %Boolean
 {
-  Set package = ##class(ZPM.Package).NameVersionOpen(name, version, , .tSC)
+  Set package = ##class(ZPM.Package).NameChannelVersionOpen(name, channel, version, , .tSC)
   If ($ISOBJECT(package) && (package.deleted = 1)) {
     Return 1
   }
@@ -273,57 +287,61 @@ Method platformVersionsGet() As %ListOfDataTypes
   Return tList
 }
 
-ClassMethod DeleteExistingPackages(pkg As %String, version As %String) As %Status
+ClassMethod DeleteExistingPackages(pkg As %String, version As %String, channel As %String) As %Status
 {
-  // delete all "proxy" packages
-  &sql(DELETE FROM ZPM.Package WHERE Name = :pkg AND UpLink IS NOT NULL)
-  Set tSC = ..NameVersionDelete(pkg, version)
+  // delete all "proxy" packages FOR THIS CHANNEL: proxies are per-channel too, since
+  // the same upstream module may be mirrored into several channels.
+  &sql(DELETE FROM ZPM.Package WHERE Name = :pkg AND channel = :channel AND UpLink IS NOT NULL)
+  Set tSC = ..NameChannelVersionDelete(pkg, channel, version)
   Return:$$$ISERR(tSC) tSC
 
   Return $$$OK
 }
 
-ClassMethod DeletePackageVersion(pkg As %String, version As %String) As %Status
+ClassMethod DeletePackageVersion(pkg As %String, version As %String, channel As %String) As %Status
 {
-  Set package = ##class(ZPM.Package).NameVersionOpen(pkg, version, , .tSC)
+  Set package = ##class(ZPM.Package).NameChannelVersionOpen(pkg, channel, version, , .tSC)
   Return:$$$ISERR(tSC) tSC
   Set package.deleted = 1
   Set tSC = package.%Save()
   Return:$$$ISERR(tSC) tSC
   Set count = 0
-  &sql(SELECT count(1) INTO :count FROM ZPM.Package WHERE name = :pkg AND (deleted IS NULL OR deleted != 1))
+  &sql(SELECT count(1) INTO :count FROM ZPM.Package WHERE name = :pkg AND channel = :channel AND (deleted IS NULL OR deleted != 1))
   If (count = 0) {
-    Return ..DeletePackage(pkg)
+    Return ..DeletePackage(pkg, channel)
   }
   Return $$$OK
 }
 
-ClassMethod DeletePackage(pkg As %String) As %Status
+ClassMethod DeletePackage(pkg As %String, channel As %String) As %Status
 {
-  &sql(DELETE FROM ZPM.Package WHERE name = :pkg)
+  &sql(DELETE FROM ZPM.Package WHERE name = :pkg AND channel = :channel)
   If SQLCODE'=0 Return $$$ERROR($$$SQLError, SQLCODE, $g(%msg))
   Return $$$OK
 }
 
-ClassMethod versionValidate(pkg As %String = "", version As %String = "") As %String
+ClassMethod versionValidate(pkg As %String = "", version As %String = "", channel As %String = "") As %String
 {
   If (pkg="") {
     Return ""
   }
+  If (channel = "") {
+    Return ""
+  }
   If (version = "") || (version = "latest") || (version = "*") {
-    &sql(SELECT TOP 1 Version INTO :version FROM ZPM.Package WHERE Name = :pkg 
+    &sql(SELECT TOP 1 Version INTO :version FROM ZPM.Package WHERE Name = :pkg AND channel = :channel
           ORDER BY versionMajor DESC, versionMinor DESC, versionPatch DESC, versionPrerelease DESC, versionBuildmetadata DESC
     )
     If SQLCODE'=0 Return ""
     Return version
   }
-  If ..%ExistsId(pkg _ "||" _ version) {
+  If ..%ExistsId(pkg _ "||" _ channel _ "||" _ version) {
     Return version
   }
   Return ""
 }
 
-ClassMethod Populate(Path As %String, kill = 0)
+ClassMethod Populate(Path As %String, kill = 0, channel As %String = "")
 {
   If '##class(%File).DirectoryExists(Path) {
     Return
@@ -336,7 +354,7 @@ ClassMethod Populate(Path As %String, kill = 0)
     Set name = rs.name
     Continue:rs.Type'="D"
     
-    Set tSC = ..LoadPackage(name)
+    Set tSC = ..LoadPackage(name, channel)
     If $$$ISERR(tSC) {
       Do $System.OBJ.DisplayError(tSC)
     }
@@ -359,7 +377,7 @@ Method UpdateDescriptionFromManifest() As %Status
   Return $$$OK
 }
 
-ClassMethod LoadPackage(Path As %String, repository As %String = "", silent As %Boolean = 0) As %Status
+ClassMethod LoadPackage(Path As %String, channel As %String, repository As %String = "", silent As %Boolean = 0) As %Status
 {
   Set tStream = ##class(%Stream.FileCharacter).%New()
   Set moduleFile = ##class(%File).NormalizeFilename("module.xml", Path)
@@ -434,8 +452,12 @@ ClassMethod LoadPackage(Path As %String, repository As %String = "", silent As %
     Write "ArchiveSize: " _ archive.Size
   }
 
-  Do ..DeleteExistingPackages(name,version)
+  If (channel = "") {
+    Return $$$ERROR($$$GeneralError, "channel is required: one registry hosts every channel")
+  }
+  Do ..DeleteExistingPackages(name,version,channel)
   Set package = ..%New()
+  Set package.channel = channel
   Set package.name = name
   Set package.description = description
   Set keywords = $ZStrip(keywords,"<>W")
@@ -487,7 +509,7 @@ ClassMethod LoadPackage(Path As %String, repository As %String = "", silent As %
 /// @param name Output: lower-cased package name from module.xml
 /// @param version Output: package version from module.xml
 /// @return %Status
-ClassMethod LoadPackageFromArchive(archivePath As %String, manifestPath As %String, repository As %String = "", silent As %Boolean = 0, Output name As %String, Output version As %String) As %Status
+ClassMethod LoadPackageFromArchive(archivePath As %String, manifestPath As %String, channel As %String, repository As %String = "", silent As %Boolean = 0, Output name As %String, Output version As %String) As %Status
 {
   If '##class(%File).Exists(archivePath) {
     Return $$$ERROR($$$GeneralError, "archive not found: " _ archivePath)
@@ -539,8 +561,12 @@ ClassMethod LoadPackageFromArchive(archivePath As %String, manifestPath As %Stri
     If $IsObject(tRes.GetAt(1)) Set keywords = tRes.GetAt(1).Value
   }
 
-  Do ..DeleteExistingPackages(name,version)
+  If (channel = "") {
+    Return $$$ERROR($$$GeneralError, "channel is required: one registry hosts every channel")
+  }
+  Do ..DeleteExistingPackages(name,version,channel)
   Set package = ..%New()
+  Set package.channel = channel
   Set package.name = name
   Set package.description = description
   Set keywords = $ZStrip(keywords,"<>W")
@@ -668,17 +694,24 @@ ClassMethod UpdatePackage(jo As %DynamicObject) As %Status
     Set tName = $$$lcase(meta.name)
     Set id = ""
 
-    &sql(DELETE FROM ZPM.Package WHERE Name = :tName AND UpLink IS NOT NULL) // delete all "proxy" packages
+    // ONE registry hosts every channel, so this upstream publish names the channel it
+    // publishes into. Fail closed rather than guess: a wrong channel puts the artefact
+    // in front of the wrong audience.
+    Set channel = ""
+    If jo.%IsDefined("channel") { Set channel = jo.%Get("channel") }
+    If (channel = "") { $$$ThrowStatus($$$ERROR(5001, "channel is required")) }
 
-    &sql(SELECT ID into :id FROM ZPM.Package WHERE name=:tName ORDER BY versionMajor DESC, versionMinor DESC, versionPatch DESC, versionPrerelease  DESC)
+    &sql(DELETE FROM ZPM.Package WHERE Name = :tName AND channel = :channel AND UpLink IS NOT NULL) // delete all "proxy" packages
+
+    &sql(SELECT ID into :id FROM ZPM.Package WHERE name=:tName AND channel = :channel ORDER BY versionMajor DESC, versionMinor DESC, versionPatch DESC, versionPrerelease  DESC)
     If (id'="") { 
       If (..repositoryGetStored(id)'=url) { 
         $$$ThrowStatus($$$ERROR(5001, "Invalid repository for this Package"))
       } Else { 
-        If (..NameVersionExists(meta.name,meta.version)) { 
+        If (..NameChannelVersionExists(meta.name, channel, meta.version)) { 
           $$$ThrowStatus($$$ERROR(5001, "Version "_meta.version_" of Package "_meta.name_" is already published"))
         }
-      	Set sc = ..Publish(url, name)	
+      	Set sc = ..Publish(url, name, channel)	
       }
     } Else {
       If (..RepositoryExists(url, .id)) {
@@ -696,15 +729,15 @@ ClassMethod UpdatePackage(jo As %DynamicObject) As %Status
   Return sc
 }
 
-ClassMethod Publish(url As %String, name As %String) As %Status
+ClassMethod Publish(url As %String, name As %String, channel As %String) As %Status
 {
   Set branch = "master"
   Set outputFolder = ..DownloadPackageFromGitHub(url, .branch)
   Set packageFolder = ##class(%File).NormalizeDirectory(name_"-"_branch, outputFolder)
-  Return ..LoadPackage(packageFolder, url, 1)
+  Return ..LoadPackage(packageFolder, channel, url, 1)
 }
 
-ClassMethod LoadFromGitHub(Url = "")
+ClassMethod LoadFromGitHub(Url = "", channel As %String = "")
 {
   If Url="" {
     Return ""
@@ -716,7 +749,7 @@ ClassMethod LoadFromGitHub(Url = "")
   Set branch = "master"
   Set outputFolder = ..DownloadPackageFromGitHub(Url, .branch)
   Set packageFolder = ##class(%File).NormalizeDirectory(name_"-"_branch, outputFolder)
-  Set tSC = ..LoadPackage(packageFolder, Url)
+  Set tSC = ..LoadPackage(packageFolder, channel, Url)
   If $$$ISERR(tSC) { 
     Do $System.OBJ.DisplayError() 
   } Else { 
@@ -725,8 +758,14 @@ ClassMethod LoadFromGitHub(Url = "")
   Do ##class(%File).RemoveDirectoryTree(outputFolder)
 }
 
-/// returns latest versions of packages 
-ClassMethod GetLatest(searchTerms As %DynamicArray = "", manifest As %String = "", allVersions As %String = "", owner As %String = "", Output pStatus As %Status) As %DynamicArray
+/// returns latest versions of packages
+///
+/// `channel` is an optional FILTER: this is a listing, so browsing every channel is
+/// legitimate as long as each row reports its own channel — which it does. Each
+/// channel's "latest" is computed per (name, channel): the correlated subqueries below
+/// match on channel as well as name, or a sprint build could be reported as develop's
+/// latest.
+ClassMethod GetLatest(searchTerms As %DynamicArray = "", manifest As %String = "", allVersions As %String = "", owner As %String = "", channel As %String = "", Output pStatus As %Status) As %DynamicArray
 {
   Set pStatus = 1
   Set params = 1
@@ -752,11 +791,25 @@ ClassMethod GetLatest(searchTerms As %DynamicArray = "", manifest As %String = "
     Set searchCondition = searchCondition_ " ) "
   }
 
-  Set sql = "SELECT p1.name, p1.repository, p1.description, p1.version, ul.Host, IFNULL( (SELECT TOP 1 1 FROM ZPM.Package p3 WHERE p1.name=p3.name AND p3.owner = ? ORDER BY p3.versionMajor DESC, p3.versionMinor DESC, p3.versionPatch DESC, p3.versionPrerelease DESC, p3.versionBuildmetadata DESC ), 0, 1) as owner"_
+  // Optional channel filter, appended last so its positional parameter follows the
+  // search-term parameters (?s bind in textual order).
+  If (channel '= "") {
+    Set channelCondition = " AND p1.channel = ? "
+  } Else {
+    Set channelCondition = " "
+  }
+
+  Set sql = "SELECT p1.name, p1.channel, p1.repository, p1.description, p1.version, ul.Host, IFNULL( (SELECT TOP 1 1 FROM ZPM.Package p3 WHERE p1.name=p3.name AND p1.channel=p3.channel AND p3.owner = ? ORDER BY p3.versionMajor DESC, p3.versionMinor DESC, p3.versionPatch DESC, p3.versionPrerelease DESC, p3.versionBuildmetadata DESC ), 0, 1) as owner"_
             "  FROM ZPM.Package p1 "_
             "  LEFT JOIN ZPM.UpLink ul ON ul.ID = p1.UpLink " _
             "  WHERE (deleted = 0 OR deleted IS NULL) AND "_searchCondition_" "_ 
-            " AND p1.version = ( SELECT TOP 1 version FROM ZPM.Package p2 WHERE p1.name=p2.name ORDER BY p2.versionMajor DESC, p2.versionMinor DESC, p2.versionPatch DESC, p2.versionPrerelease DESC, p2.versionBuildmetadata DESC ) "
+            " AND p1.version = ( SELECT TOP 1 version FROM ZPM.Package p2 WHERE p1.name=p2.name AND p1.channel=p2.channel ORDER BY p2.versionMajor DESC, p2.versionMinor DESC, p2.versionPatch DESC, p2.versionPrerelease DESC, p2.versionBuildmetadata DESC ) "
+            _channelCondition
+
+  If (channel '= "") {
+    Set params(params+1) = channel
+    Set params = params + 1
+  }
 
   Set tStatement = ##class(%SQL.Statement).%New()
   Set tStatus = tStatement.%Prepare(sql)
@@ -773,6 +826,7 @@ ClassMethod GetLatest(searchTerms As %DynamicArray = "", manifest As %String = "
   While tResult.%Next() {
     Set tPkgInfo = {
       "name": (tResult.name),
+      "channel": (tResult.channel),
       "description": (tResult.description),
       "repository": (tResult.repository),
       "origin": (tResult.Host),
@@ -782,7 +836,7 @@ ClassMethod GetLatest(searchTerms As %DynamicArray = "", manifest As %String = "
 
     If (manifest = "1") {
       Set tPkgInfo.manifest = ""
-      Set package = ##class(ZPM.Package).%OpenId(tResult.name_"||"_tResult.version)
+      Set package = ##class(ZPM.Package).%OpenId(tResult.name_"||"_tResult.channel_"||"_tResult.version)
       If ($IsObject(package.manifest)) {
         While ('package.manifest.AtEnd) {
           Set tPkgInfo.manifest = tPkgInfo.manifest _ package.manifest.Read(100)
@@ -794,9 +848,9 @@ ClassMethod GetLatest(searchTerms As %DynamicArray = "", manifest As %String = "
       Set tPkgInfo.allVersions = []
       Set sql2 = "SELECT version "_
             " FROM ZPM.Package "_
-            " WHERE name = ? AND (deleted = 0 OR deleted IS NULL) "_
+            " WHERE name = ? AND channel = ? AND (deleted = 0 OR deleted IS NULL) "_
             " ORDER BY versionMajor DESC, versionMinor DESC, versionPatch DESC, versionPrerelease DESC, versionBuildmetadata DESC"
-      Set versionsResult = ##class(%SQL.Statement).%ExecDirect(, sql2, tResult.name)
+      Set versionsResult = ##class(%SQL.Statement).%ExecDirect(, sql2, tResult.name, tResult.channel)
       While versionsResult.%Next() {
         Do tPkgInfo.allVersions.%Push(versionsResult.version)
       }
@@ -807,21 +861,21 @@ ClassMethod GetLatest(searchTerms As %DynamicArray = "", manifest As %String = "
   Return tList
 }
 
-Query ListLatest(searchTerm As %String = "") As %SQLQuery(ROWSPEC = "name:%String,description:%String,repository:%String,version:%String")
+Query ListLatest(searchTerm As %String = "") As %SQLQuery(ROWSPEC = "name:%String,channel:%String,description:%String,repository:%String,version:%String")
 {
-SELECT name, repository, version, description 
+SELECT name, channel, repository, version, description 
 FROM ZPM.Package p1
 WHERE 
   version= (  
-    SELECT TOP 1 version FROM ZPM.Package p2 WHERE p1.name=p2.name 
+    SELECT TOP 1 version FROM ZPM.Package p2 WHERE p1.name=p2.name AND p1.channel=p2.channel 
     ORDER BY versionMajor DESC, versionMinor DESC, versionPatch DESC, versionPrerelease DESC, versionBuildmetadata DESC ) 
   AND (:searchTerm IS NULL OR (
      name %MATCHES :searchTerm
   OR description %MATCHES :searchTerm
   OR keywords %MATCHES :searchTerm)
 )
-GROUP BY name
-ORDER BY name
+GROUP BY name, channel
+ORDER BY name, channel
 }
 
 Storage Default

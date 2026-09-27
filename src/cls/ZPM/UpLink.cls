@@ -148,10 +148,13 @@ ClassMethod FindPackageInAllUpLinks(pkg As %String) As %Status
 ClassMethod LoadPackageFromAllUpLinks(pkg As %String = "", version As %String = "") As ZPM.Package
 {
     Do ..ReadUplinksFromFile()
-    Set pPackage = ##class(ZPM.Package).%OpenId(pkg_"||"_version)
+    // Mirrors live in the reserved `uplink` channel (see ZPM.Package.VersionFind), so a
+    // proxied community package is never addressed as a release-channel build.
+    Set pPackage = ##class(ZPM.Package).%OpenId(pkg_"||"_"uplink"_"||"_version)
     If ('$IsObject(pPackage)) {
         Set pPackage = ##class(ZPM.Package).%New()
         Set pPackage.name = pkg
+        Set pPackage.channel = "uplink"
     }
 
     Set sql = "SELECT ID FROM ZPM.UpLink WHERE Active = 1 ORDER BY Position"
@@ -275,7 +278,7 @@ Method LoadPackage(pPackage As ZPM.Package, pkg As %String = "", version As %Str
     return $$$OK
 }
 
-Method DeleteNewerVersions(name As %String, version As %String = "")
+Method DeleteNewerVersions(name As %String, version As %String = "", channel As %String = "uplink")
 {
     Set id = ..%Id()
     Set versionMajor = +$Piece(version,".",1)
@@ -283,7 +286,7 @@ Method DeleteNewerVersions(name As %String, version As %String = "")
     Set versionPatch = +$Piece($Piece($Piece(version,".",3),"-"),"+")
     Set versionPrerelease = $Piece($Piece($Piece(version,".",3,*),"-",2,*),"+")
     Set versionBuildmetadata = $Piece(version,"+",2)
-    &sql(DELETE FROM ZPM.Package WHERE name=:name AND UpLink=:id AND versionMajor>:versionMajor 
+    &sql(DELETE FROM ZPM.Package WHERE name=:name AND channel=:channel AND UpLink=:id AND versionMajor>:versionMajor 
             AND versionMinor>:versionMinor AND versionPatch>:versionPatch AND versionPrerelease>:versionPrerelease AND versionBuildmetadata>:versionBuildmetadata)
 }
 
@@ -293,8 +296,8 @@ Method AddPackage(pPackage As %DynamicObject) As %Status
     If ( ##class(ZPM.Package).NameUpLinkExists(pPackage.name, "") ) {
         Return 0
     }
-    // this version of this package already exists
-    If ( ##class(ZPM.Package).NameVersionExists(pPackage.name, pPackage.versions."0")) {
+    // this version of this package already exists (in the mirror channel)
+    If ( ##class(ZPM.Package).NameChannelVersionExists(pPackage.name, "uplink", pPackage.versions."0")) {
         Return 0
     }
 
@@ -304,11 +307,12 @@ Method AddPackage(pPackage As %DynamicObject) As %Status
     }
 
     // remove newer versions  
-    Do ..DeleteNewerVersions(pPackage.name, pPackage.versions."0")
+    Do ..DeleteNewerVersions(pPackage.name, pPackage.versions."0", "uplink")
     
-    // add
+    // add (into the reserved mirror channel — see ZPM.Package.VersionFind)
     Set tPackage = ##class(ZPM.Package).%New()
     Set tPackage.UpLink = $this
+    Set tPackage.channel = "uplink"
     Set tPackage.name = pPackage.name
     Set tPackage.version = pPackage.versions."0"
     Set tPackage.description = pPackage.description
