@@ -118,9 +118,42 @@ ClassMethod Reset() As %Status
   Quit ..%ProcessResult(sc)
 }
 
-ClassMethod Package(pkg As %String = "", version As %String = "", platformVersion As %String = "") As %Status
+/// One registry hosts every channel, so any endpoint that RESOLVES or MODIFIES an
+/// artefact must be told which channel it means: the same module@version can exist in
+/// several channels, and a wrong answer would serve or delete another channel's build.
+/// Fail closed rather than guess.
+ClassMethod RequireChannel(Output channel As %String) As %Status
+{
+  Set channel = $ZStrip(%request.Get("channel", ""), "<>W")
+  If (channel = "") {
+    Return $$$ERROR($$$GeneralError, "channel is required: pass ?channel=<release|develop|sprint|incubating> — one registry hosts every channel")
+  }
+  Return $$$OK
+}
+
+/// As RequireChannel, but for endpoints that take a JSON body (the admin ingest).
+ClassMethod RequireBodyChannel(Output channel As %String) As %Status
+{
+  Set channel = ""
+  If %request.Content.%IsDefined("channel") {
+    Set channel = $ZStrip(%request.Content.%Get("channel"), "<>W")
+  }
+  If (channel = "") {
+    Return $$$ERROR($$$GeneralError, "body ""channel"" is required — one registry hosts every channel")
+  }
+  Return $$$OK
+}
+
+ClassMethod Package(pkg As %String = "", version As %String = "", platformVersion As %String = "", channel As %String = "") As %Status
 {
   Set pkg = $$$lcase(pkg)
+
+  // In-process callers (PublishPackage) pass the channel they already validated in the
+  // JSON body; a routed request names it as a query parameter.
+  If (channel = "") {
+    Set tSC = ..RequireChannel(.channel)
+    If $$$ISERR(tSC) { Return ..ReportHttpStatusCode(..#HTTP400BADREQUEST, tSC) }
+  }
 
   If (version="") {
     $$$ThrowOnError(##class(ZPM.UpLink).FindPackageInAllUpLinks(pkg))
@@ -128,11 +161,11 @@ ClassMethod Package(pkg As %String = "", version As %String = "", platformVersio
   Set tIncludePrerelease = %request.Get("includePrerelease", 1)
   Set tIncludeSnapshots = %request.Get("includeSnapshots", 1)
 
-  Set version = ##class(ZPM.Package).VersionFind(pkg, version, tIncludePrerelease, tIncludeSnapshots)
+  Set version = ##class(ZPM.Package).VersionFind(pkg, version, tIncludePrerelease, tIncludeSnapshots, channel)
   If (version = "") {
     Return ..ReportHttpStatusCode(..#HTTP404NOTFOUND)
   }
-  Set package = ##class(ZPM.Package).NameVersionOpen(pkg, version, .tSC)
+  Set package = ##class(ZPM.Package).NameChannelVersionOpen(pkg, channel, version, .tSC)
   If $$$ISERR(tSC) || ('$IsObject(package))||(package.deleted=1) {
     Return ..ReportHttpStatusCode(..#HTTP404NOTFOUND)
   }
@@ -148,7 +181,9 @@ ClassMethod Package(pkg As %String = "", version As %String = "", platformVersio
 ClassMethod PackageManifest(pkg As %String = "", version As %String = "", platformVersion As %String = "") As %Status
 {
   Set pkg = $$$lcase(pkg)
-  Set version = ##class(ZPM.Package).VersionFind(pkg, version)
+  Set tSC = ..RequireChannel(.channel)
+  If $$$ISERR(tSC) { Return ..ReportHttpStatusCode(..#HTTP400BADREQUEST, tSC) }
+  Set version = ##class(ZPM.Package).VersionFind(pkg, version, 1, 1, channel)
   If (version = "") {
     Return ..ReportHttpStatusCode(..#HTTP404NOTFOUND)
   }
@@ -156,7 +191,7 @@ ClassMethod PackageManifest(pkg As %String = "", version As %String = "", platfo
     Set package = ##class(ZPM.DeployedPackage).NameVersionPlatformOpen(pkg, version, platformVersion)
   }
   Else {
-    Set package = ##class(ZPM.Package).NameVersionOpen(pkg, version)
+    Set package = ##class(ZPM.Package).NameChannelVersionOpen(pkg, channel, version)
   }
 
   If ('$IsObject(package))||('package.manifest.Size)||(package.deleted=1) {
@@ -170,12 +205,14 @@ ClassMethod PackageManifest(pkg As %String = "", version As %String = "", platfo
 ClassMethod PackageInstaller(pkg As %String = "", version As %String = "") As %Status
 {
   Set pkg = $$$lcase(pkg)
-  Set version = ##class(ZPM.Package).VersionFind(pkg, version)
+  Set tSC = ..RequireChannel(.channel)
+  If $$$ISERR(tSC) { Return ..ReportHttpStatusCode(..#HTTP400BADREQUEST, tSC) }
+  Set version = ##class(ZPM.Package).VersionFind(pkg, version, 1, 1, channel)
   If (version = "") {
     Return ..ReportHttpStatusCode(..#HTTP404NOTFOUND)
   }
 
-  Set package = ##class(ZPM.Package).NameVersionOpen(pkg, version)
+  Set package = ##class(ZPM.Package).NameChannelVersionOpen(pkg, channel, version)
   If ('$IsObject(package)||(package.deleted=1)) {
     Return ..ReportHttpStatusCode(..#HTTP404NOTFOUND)
   }
@@ -195,19 +232,21 @@ ClassMethod OptionsPackageVersion(pkg As %String = "", version As %String = "") 
   Set settingsFile = ##class(ZPM.Settings).%New()
   Set tSCAuth = ##class(ZPM.Owner).IsAuth()
   Set pkg = $$$lcase(pkg)
+  Set tSC = ..RequireChannel(.channel)
+  If $$$ISERR(tSC) { Return ..ReportHttpStatusCode(..#HTTP400BADREQUEST, tSC) }
 
   If ('##class(ZPM.Package).NameExists(pkg)) {
     Do %response.SetHeader("ALLOW",options)
     Return $$$OK
   }
 
-  If ( ($$$lcase(version)'="all") && '##class(ZPM.Package).NameVersionExists(pkg, version) ) {
-    // version doesn't exit
+  If ( ($$$lcase(version)'="all") && '##class(ZPM.Package).NameChannelVersionExists(pkg, channel, version) ) {
+    // version doesn't exist in this channel
     Do %response.SetHeader("ALLOW",options)
     Return $$$OK
   }
 
-  Set tSCOwner = ##class(ZPM.Owner).IsOwner(pkg, "delete")
+  Set tSCOwner = ##class(ZPM.Owner).IsOwner(pkg, "delete", channel)
 
   If $$$ISOK(tSCAuth),$$$ISOK(tSCOwner),settingsFile.GetDeleteEnable() {
     Set options = options_",DELETE"
@@ -224,12 +263,14 @@ ClassMethod UnPublishPackageVersion(pkg As %String = "", version As %String = ""
   If ($$$ISERR(tSC)) {
     Return ..ReportHttpStatusCode(..#HTTP401UNAUTHORIZED, tSC)
   }
+  Set tSC = ..RequireChannel(.channel)
+  If $$$ISERR(tSC) { Return ..ReportHttpStatusCode(..#HTTP400BADREQUEST, tSC) }
   Set settingsFile = ##class(ZPM.Settings).%New()
   If ('settingsFile.GetDeleteEnable()) {
     Return ..ReportHttpStatusCode(..#HTTP403FORBIDDEN, $$$ERROR(5001,"Delete not allowed for this registry"))
   }
   Set pkg = $$$lcase(pkg)
-  Set tSC = ##class(ZPM.Owner).IsOwner(pkg, "delete")
+  Set tSC = ##class(ZPM.Owner).IsOwner(pkg, "delete", channel)
   If ($$$ISERR(tSC)) {
     Return ..ReportHttpStatusCode(..#HTTP403FORBIDDEN, tSC)
   }
@@ -237,9 +278,9 @@ ClassMethod UnPublishPackageVersion(pkg As %String = "", version As %String = ""
     If ('##class(ZPM.Package).NameExists(pkg)) {
       Return ..ReportHttpStatusCode(..#HTTP404NOTFOUND)
     }
-    Return ##class(ZPM.Package).DeletePackage(pkg)
+    Return ##class(ZPM.Package).DeletePackage(pkg, channel)
   } Else {
-    Set pPackage = ##class(ZPM.Package).NameVersionOpen(pkg, version)
+    Set pPackage = ##class(ZPM.Package).NameChannelVersionOpen(pkg, channel, version)
     If ('$IsObject(pPackage)) {
       Return ..ReportHttpStatusCode(..#HTTP404NOTFOUND)
     }
@@ -247,7 +288,7 @@ ClassMethod UnPublishPackageVersion(pkg As %String = "", version As %String = ""
       // only directly published package could be deleted
       Return ..ReportHttpStatusCode(..#HTTP400BADREQUEST)
     }
-    Return ##class(ZPM.Package).DeletePackageVersion(pkg, version)
+    Return ##class(ZPM.Package).DeletePackageVersion(pkg, version, channel)
   }
 }
 
@@ -316,31 +357,35 @@ ClassMethod AdminPublishPackage() As %Status
   If '##class(%File).Exists(manifestPath) {
     Return ..ReportHttpStatusCode(..#HTTP400BADREQUEST, $$$ERROR(5001,"module.xml not found: "_manifestPath))
   }
-  Set tSC = ##class(ZPM.Package).LoadPackageFromArchive(archivePath, manifestPath, "", 1, .name, .version)
+  Set tSC = ..RequireBodyChannel(.channel)
+  If $$$ISERR(tSC) Return ..ReportHttpStatusCode(..#HTTP400BADREQUEST, tSC)
+  Set tSC = ##class(ZPM.Package).LoadPackageFromArchive(archivePath, manifestPath, channel, "", 1, .name, .version)
   If $$$ISERR(tSC) {
     Return ..ReportHttpStatusCode(..#HTTP500INTERNALSERVERERROR, tSC)
   }
-  Return ..%ProcessResult($$$OK, {"name": (name), "version": (version), "archive": (archivePath), "manifest": (manifestPath)})
+  Return ..%ProcessResult($$$OK, {"name": (name), "version": (version), "channel": (channel), "archive": (archivePath), "manifest": (manifestPath)})
 }
 
 ClassMethod AdminUnpublishPackageVersion(pkg As %String = "", version As %String = "") As %Status
 {
   Set tSC = ..CheckAdminToken()
   If $$$ISERR(tSC) Return ..ReportHttpStatusCode(..#HTTP401UNAUTHORIZED, tSC)
+  Set tSC = ..RequireChannel(.channel)
+  If $$$ISERR(tSC) Return ..ReportHttpStatusCode(..#HTTP400BADREQUEST, tSC)
   Set settingsFile = ##class(ZPM.Settings).%New()
   If ('settingsFile.GetDeleteEnable()) {
     Return ..ReportHttpStatusCode(..#HTTP403FORBIDDEN, $$$ERROR(5001,"Delete not allowed for this registry"))
   }
   Set pkg = $$$lcase(pkg)
-  Set pPackage = ##class(ZPM.Package).NameVersionOpen(pkg, version)
+  Set pPackage = ##class(ZPM.Package).NameChannelVersionOpen(pkg, channel, version)
   If ('$IsObject(pPackage)) {
     Return ..ReportHttpStatusCode(..#HTTP404NOTFOUND)
   }
-  Set tSC = ##class(ZPM.Package).DeletePackageVersion(pkg, version)
+  Set tSC = ##class(ZPM.Package).DeletePackageVersion(pkg, version, channel)
   If tSC '= 1 {
     Return ..ReportHttpStatusCode(..#HTTP500INTERNALSERVERERROR, $$$ERROR(5001,"delete failed for "_pkg_"@"_version))
   }
-  Return ..%ProcessResult($$$OK, {"deleted": (pkg _ "@" _ version)})
+  Return ..%ProcessResult($$$OK, {"deleted": (pkg _ "@" _ version), "channel": (channel)})
 }
 
 ClassMethod AdminSetKeywords(pkg As %String = "", version As %String = "") As %Status
@@ -351,7 +396,9 @@ ClassMethod AdminSetKeywords(pkg As %String = "", version As %String = "") As %S
   If keywords = "" {
     Return ..ReportHttpStatusCode(..#HTTP400BADREQUEST, $$$ERROR(5001,"body {""keywords"": ""a,b,c""} required"))
   }
-  Set pPackage = ##class(ZPM.Package).NameVersionOpen($$$lcase(pkg), version)
+  Set tSC = ..RequireChannel(.channel)
+  If $$$ISERR(tSC) Return ..ReportHttpStatusCode(..#HTTP400BADREQUEST, tSC)
+  Set pPackage = ##class(ZPM.Package).NameChannelVersionOpen($$$lcase(pkg), channel, version)
   If ('$IsObject(pPackage)) {
     Return ..ReportHttpStatusCode(..#HTTP404NOTFOUND)
   }
@@ -376,15 +423,19 @@ ClassMethod PublishPackage() As %Status
     Set deployed = %request.Content.%Get("deployed")
     Set platformVersion = %request.Content.%Get("platform_version")
 
+    Set tSC = ..RequireBodyChannel(.channel)
+    If ($$$ISERR(tSC)) {
+      Return ..ReportHttpStatusCode(..#HTTP400BADREQUEST, tSC)
+    }
     Set tSC = ##class(ZPM.Owner).IsAuth()
     If ($$$ISERR(tSC)) {
       Return ..ReportHttpStatusCode(..#HTTP401UNAUTHORIZED, tSC)
     }
-    Set tSC = ##class(ZPM.Owner).IsOwner(name)
+    Set tSC = ##class(ZPM.Owner).IsOwner(name, "", channel)
     If ($$$ISERR(tSC)) {
       Return ..ReportHttpStatusCode(..#HTTP403FORBIDDEN, tSC)
     }
-    If (##class(ZPM.Package).MarkAsDeleted(name, version)) {
+    If (##class(ZPM.Package).MarkAsDeleted(name, version, channel)) {
       Return ..ReportHttpStatusCode(..#HTTP500INTERNALSERVERERROR, $$$ERROR(5001,"This version was deleted, change version number"))
     }
 
@@ -392,12 +443,13 @@ ClassMethod PublishPackage() As %Status
       Return ..ReportHttpStatusCode(..#HTTP400BADREQUEST)
     }
 
-    If ##class(ZPM.Package).NameVersionExists(name, version, .id) {
+    If ##class(ZPM.Package).NameChannelVersionExists(name, channel, version, .id) {
       Set package = ##class(ZPM.Package).%OpenId(id)
       Set package.UpLink = ""
     }
     Else {
       Set package = ##class(ZPM.Package).%New()
+      Set package.channel = channel
     }
 
     $$$ThrowOnError(package.%JSONImport(%request.Content))
@@ -419,8 +471,8 @@ ClassMethod PublishPackage() As %Status
       $$$ThrowOnError(package.packageFromBase64(%request.Content.%Get("package",,"stream")))
     }
     $$$ThrowOnError(package.%Save())
-    Do ##class(ZPM.Owner).SaveOwner(package.name, package.version)
-    Return ..Package(package.name, package.version)
+    Do ##class(ZPM.Owner).SaveOwner(package.name, package.version, channel)
+    Return ..Package(package.name, package.version, "", channel)
   } catch ex {
     Do ex.Log()
     Return ..Http500(ex)
@@ -439,7 +491,9 @@ ClassMethod GetArchive(name, platformVersion, fileName) As %Status
 {
   Set version = $Piece($Piece(fileName, ".tgz", 1), name _ "-", 2, *)
 
-  Set version = ##class(ZPM.Package).VersionFind(name, version)
+  Set tSC = ..RequireChannel(.channel)
+  If $$$ISERR(tSC) { Return ..ReportHttpStatusCode(..#HTTP400BADREQUEST, tSC) }
+  Set version = ##class(ZPM.Package).VersionFind(name, version, 1, 1, channel)
   If (version = "") {
     Return ..ReportHttpStatusCode(..#HTTP404NOTFOUND)
   }
@@ -453,7 +507,7 @@ ClassMethod GetArchive(name, platformVersion, fileName) As %Status
     Set package = ##class(ZPM.DeployedPackage).NameVersionPlatformOpen(name, version, platformVersion, , .tSC)
   }
   Else {
-    Set package = ##class(ZPM.Package).NameVersionOpen(name, version, , .tSC)
+    Set package = ##class(ZPM.Package).NameChannelVersionOpen(name, channel, version, , .tSC)
   }
 
   If '$IsObject(package)||('package.size)||(package.deleted=1) {
@@ -485,7 +539,10 @@ ClassMethod AllPackages() As %Status
   Set manifest = %request.Get("manifest","")
   Set allVersions = %request.Get("allVersions","")
   Set owner = ##class(ZPM.Owner).GetId()
-  Set tList = ##class(ZPM.Package).GetLatest(searchTerms, manifest, allVersions, owner, .tSC)
+  // AllPackages is a LISTING: an absent channel means "every channel", and each row
+  // carries its own, so this is a filter rather than a requirement.
+  Set channel = %request.Get("channel", "")
+  Set tList = ##class(ZPM.Package).GetLatest(searchTerms, manifest, allVersions, owner, channel, .tSC)
 
   If ($$$ISERR(tSC)) {
     Return ..ReportHttpStatusCode(..#HTTP400BADREQUEST, tSC)
