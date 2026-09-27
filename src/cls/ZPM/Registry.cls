@@ -4,6 +4,19 @@ Class ZPM.Registry Extends ZPM.REST.Base
 
 Parameter VERSION = "1.3.7";
 
+/// Channel assumed when a request does not name one, for compatibility with stock
+/// zpm-registry clients that predate channels.
+///
+/// This registry historically held ONE stream of packages, and `release` is what names
+/// that stream — so defaulting to it RESTORES stock behaviour rather than inventing an
+/// answer: a stock client that installs `foo` keeps getting the release build, and the
+/// channel it actually got is visible in the response, because every package row carries
+/// its channel. A channel-aware caller always names one explicitly, so nothing is
+/// ambiguous for it.
+///
+/// Set to "" to make channel-scoped requests fail closed instead.
+Parameter DEFAULTCHANNEL = "release";
+
 XData UrlMap [ XMLNamespace = "http://www.intersystems.com/urlmap" ]
 {
 <Routes>
@@ -125,6 +138,9 @@ ClassMethod Reset() As %Status
 ClassMethod RequireChannel(Output channel As %String) As %Status
 {
   Set channel = $ZStrip(%request.Get("channel", ""), "<>W")
+  // Stock clients do not send ?channel=. Fall back to the DECLARED default (not a
+  // hardcoded one) so they keep working, as long as DEFAULTCHANNEL names a channel.
+  If (channel = "") { Set channel = $ZStrip(..#DEFAULTCHANNEL, "<>W") }
   If (channel = "") {
     Return $$$ERROR($$$GeneralError, "channel is required: pass ?channel=<release|develop|sprint|incubating> — one registry hosts every channel")
   }
@@ -138,6 +154,9 @@ ClassMethod RequireBodyChannel(Output channel As %String) As %Status
   If %request.Content.%IsDefined("channel") {
     Set channel = $ZStrip(%request.Content.%Get("channel"), "<>W")
   }
+  // As RequireChannel: fall back to the declared default so a legacy publisher that
+  // predates channels lands where it used to, rather than failing or guessing.
+  If (channel = "") { Set channel = $ZStrip(..#DEFAULTCHANNEL, "<>W") }
   If (channel = "") {
     Return $$$ERROR($$$GeneralError, "body ""channel"" is required — one registry hosts every channel")
   }
