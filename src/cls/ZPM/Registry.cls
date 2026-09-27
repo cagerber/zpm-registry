@@ -2,7 +2,7 @@
 Class ZPM.Registry Extends ZPM.REST.Base
 {
 
-Parameter VERSION = "1.3.7";
+Parameter VERSION = "1.3.8";
 
 /// Channel assumed when a request does not name one, for compatibility with stock
 /// zpm-registry clients that predate channels.
