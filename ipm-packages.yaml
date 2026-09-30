@@ -14,11 +14,6 @@ repo: cagerber/zpm-registry
 
 mode: patch
 
-versions:
-  # Declared for the formal channel. `sprint`/`incubating` are MINTED as a chrono-semver
-  # at build time and must not be declared here.
-  release: "1.3.8"
-
 packages:
   - id: trifour-zpm-registry
     description: "Trifour's channel-aware fork of the ZPM registry"
