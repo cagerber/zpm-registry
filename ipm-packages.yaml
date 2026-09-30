@@ -11,6 +11,7 @@
 schema: trifour-ipm-packages-v1
 
 repo: cagerber/zpm-registry
+versions: {release: "1.3.7", develop: "1.3.7", sprint: "1.3.7", incubating: "1.3.7"}
 
 mode: patch
 
