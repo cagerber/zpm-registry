@@ -161,7 +161,8 @@ ClassMethod Package(pkg As %String = "", version As %String = "", platformVersio
 ClassMethod PackageManifest(pkg As %String = "", version As %String = "", platformVersion As %String = "") As %Status
 {
   Set pkg = $$$lcase(pkg)
-  Set version = ##class(ZPM.Package).VersionFind(pkg, version)
+  Set channel = ..ResolveChannel(pkg, %request.Get("channel",""))
+  Set version = ##class(ZPM.Package).VersionFind(pkg, version, 1, 1, channel)
   If (version = "") {
     Return ..ReportHttpStatusCode(..#HTTP404NOTFOUND)
   }
@@ -169,7 +170,7 @@ ClassMethod PackageManifest(pkg As %String = "", version As %String = "", platfo
     Set package = ##class(ZPM.DeployedPackage).NameVersionPlatformOpen(pkg, version, platformVersion)
   }
   Else {
-    Set package = ##class(ZPM.Package).NameVersionOpen(pkg, version)
+    Set package = ##class(ZPM.Package).NameChannelVersionOpen(pkg, channel, version)
   }
 
   If ('$IsObject(package))||('package.manifest.Size)||(package.deleted=1) {
@@ -183,12 +184,13 @@ ClassMethod PackageManifest(pkg As %String = "", version As %String = "", platfo
 ClassMethod PackageInstaller(pkg As %String = "", version As %String = "") As %Status
 {
   Set pkg = $$$lcase(pkg)
-  Set version = ##class(ZPM.Package).VersionFind(pkg, version)
+  Set channel = ..ResolveChannel(pkg, %request.Get("channel",""))
+  Set version = ##class(ZPM.Package).VersionFind(pkg, version, 1, 1, channel)
   If (version = "") {
     Return ..ReportHttpStatusCode(..#HTTP404NOTFOUND)
   }
 
-  Set package = ##class(ZPM.Package).NameVersionOpen(pkg, version)
+  Set package = ##class(ZPM.Package).NameChannelVersionOpen(pkg, channel, version)
   If ('$IsObject(package)||(package.deleted=1)) {
     Return ..ReportHttpStatusCode(..#HTTP404NOTFOUND)
   }
@@ -450,15 +452,18 @@ ClassMethod UpdatePackage() As %Status
 
 ClassMethod GetArchive(name, platformVersion, fileName) As %Status
 {
+  Set name = $$$lcase(name)
   Set version = $Piece($Piece(fileName, ".tgz", 1), name _ "-", 2, *)
+  Set channel = ..ResolveChannel(name, %request.Get("channel",""))
 
-  Set version = ##class(ZPM.Package).VersionFind(name, version)
+  Set version = ##class(ZPM.Package).VersionFind(name, version, 1, 1, channel)
   If (version = "") {
     Return ..ReportHttpStatusCode(..#HTTP404NOTFOUND)
   }
 
   set data = {
     "name": (name),
+    "channel": (channel),
     "version": (version)
   }
 
@@ -466,7 +471,7 @@ ClassMethod GetArchive(name, platformVersion, fileName) As %Status
     Set package = ##class(ZPM.DeployedPackage).NameVersionPlatformOpen(name, version, platformVersion, , .tSC)
   }
   Else {
-    Set package = ##class(ZPM.Package).NameVersionOpen(name, version, , .tSC)
+    Set package = ##class(ZPM.Package).NameChannelVersionOpen(name, channel, version, , .tSC)
   }
 
   If '$IsObject(package)||('package.size)||(package.deleted=1) {
@@ -475,7 +480,7 @@ ClassMethod GetArchive(name, platformVersion, fileName) As %Status
 
   Do ##class(ZPM.Analytics.Event).SaveEvent("download", ..GetRemoteAddr(), data)
   Set token = ##class(%PopulateUtils).StringMin(16,16)
-  Set ^IRIS.TempZPMRInst(token) = $ListBuild(name, version)
+  Set ^IRIS.TempZPMRInst(token) = $ListBuild(name, version, channel)
   Do %response.SetHeader("INSTALLTOKEN",token)
 
   Set tStream = package.package
