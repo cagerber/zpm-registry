@@ -2,7 +2,7 @@
 Class ZPM.Registry Extends ZPM.REST.Base
 {
 
-Parameter VERSION = "1.3.7";
+Parameter VERSION = "1.3.10";
 
 XData UrlMap [ XMLNamespace = "http://www.intersystems.com/urlmap" ]
 {
@@ -118,21 +118,34 @@ ClassMethod Reset() As %Status
   Quit ..%ProcessResult(sc)
 }
 
+ClassMethod ResolveChannel(pkg As %String = "", Explicit As %String = "") As %String
+{
+  // Live Package IdKey is (name, channel, version). Estate packages encode the
+  // channel in the published name suffix; community mirrors use reserved "uplink".
+  If (Explicit '= "") { Return Explicit }
+  Set pkg = $$$lcase(pkg)
+  For suf = "incubating","sprint","develop" {
+    If ($Extract(pkg, *-$Length(suf), *) = ("-"_suf)) { Return suf }
+  }
+  Return "uplink"
+}
+
 ClassMethod Package(pkg As %String = "", version As %String = "", platformVersion As %String = "") As %Status
 {
   Set pkg = $$$lcase(pkg)
+  Set channel = ..ResolveChannel(pkg, %request.Get("channel",""))
 
   If (version="") {
-    $$$ThrowOnError(##class(ZPM.UpLink).FindPackageInAllUpLinks(pkg))
+    Try { Do ##class(ZPM.UpLink).FindPackageInAllUpLinks(pkg) } Catch ex { Do ex.Log() }
   }
   Set tIncludePrerelease = %request.Get("includePrerelease", 1)
   Set tIncludeSnapshots = %request.Get("includeSnapshots", 1)
 
-  Set version = ##class(ZPM.Package).VersionFind(pkg, version, tIncludePrerelease, tIncludeSnapshots)
+  Set version = ##class(ZPM.Package).VersionFind(pkg, version, tIncludePrerelease, tIncludeSnapshots, channel)
   If (version = "") {
     Return ..ReportHttpStatusCode(..#HTTP404NOTFOUND)
   }
-  Set package = ##class(ZPM.Package).NameVersionOpen(pkg, version, .tSC)
+  Set package = ##class(ZPM.Package).NameChannelVersionOpen(pkg, channel, version, .tSC)
   If $$$ISERR(tSC) || ('$IsObject(package))||(package.deleted=1) {
     Return ..ReportHttpStatusCode(..#HTTP404NOTFOUND)
   }
@@ -480,12 +493,22 @@ ClassMethod AllPackages() As %Status
   Try {
     Set searchTerms = [].%FromJSON(%request.Get("q"))
   } Catch ex {}
-  $$$ThrowOnError(##class(ZPM.UpLink).UpdatePackagesFromAllUpLinks())
+  // Uplink refresh is best-effort. A failed community mirror must never
+  // fail or corrupt packages/-/all — zpm search depends on clean JSON here.
+  Try {
+    Do ##class(ZPM.UpLink).UpdatePackagesFromAllUpLinks()
+  } Catch ex {
+    Do ex.Log()
+  }
 
   Set manifest = %request.Get("manifest","")
   Set allVersions = %request.Get("allVersions","")
   Set owner = ##class(ZPM.Owner).GetId()
-  Set tList = ##class(ZPM.Package).GetLatest(searchTerms, manifest, allVersions, owner, .tSC)
+  // Live ZPM.Package.GetLatest takes channel BEFORE Output pStatus. Passing
+  // .tSC as the 5th arg bound the status byref into the channel filter and
+  // left pStatus unset — AllPackages then returned HTTP 400 with empty text.
+  Set channel = %request.Get("channel","")
+  Set tList = ##class(ZPM.Package).GetLatest(searchTerms, manifest, allVersions, owner, channel, .tSC)
 
   If ($$$ISERR(tSC)) {
     Return ..ReportHttpStatusCode(..#HTTP400BADREQUEST, tSC)

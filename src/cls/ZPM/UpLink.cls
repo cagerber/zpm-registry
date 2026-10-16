@@ -81,6 +81,8 @@ ClassMethod UpdatePackagesFromAllUpLinks() As %Status
     Set resultset=statement.%Execute()
     While resultset.%Next() {
         Set uplink = ..%OpenId(resultset.ID)
+        // Ignore per-uplink status: a PROTECT on one mirrored package must not
+        // abort the rest or poison the AllPackages response.
         Do uplink.UpdatePackagesFromOneUpLink()
     } 
     Return $$$OK
@@ -293,8 +295,10 @@ Method AddPackage(pPackage As %DynamicObject) As %Status
     If ( ##class(ZPM.Package).NameUpLinkExists(pPackage.name, "") ) {
         Return 0
     }
+    // Community mirrors land on the reserved "uplink" channel (live Package IdKey).
+    Set mirrorChannel = "uplink"
     // this version of this package already exists
-    If ( ##class(ZPM.Package).NameVersionExists(pPackage.name, pPackage.versions."0")) {
+    If ( ##class(ZPM.Package).NameChannelVersionExists(pPackage.name, mirrorChannel, pPackage.versions."0")) {
         Return 0
     }
 
@@ -309,12 +313,20 @@ Method AddPackage(pPackage As %DynamicObject) As %Status
     // add
     Set tPackage = ##class(ZPM.Package).%New()
     Set tPackage.UpLink = $this
+    Set tPackage.channel = mirrorChannel
     Set tPackage.name = pPackage.name
     Set tPackage.version = pPackage.versions."0"
     Set tPackage.description = pPackage.description
     Set tPackage.repository = pPackage.repository
-    set status = tPackage.%Save()
-    do $System.OBJ.DisplayError(status)
+    // Never $System.OBJ.DisplayError here: AllPackages writes the HTTP body as
+    // application/json, and DisplayError dumps ObjectScript text into that stream
+    // (PROTECT / ROLLFAIL), which makes every zpm "search" skip this repo with
+    // Parsing error Code 3. Fail soft — skip the row, keep serving local packages.
+    Set status = tPackage.%Save()
+    If $$$ISERR(status) {
+        Return status
+    }
+    Return $$$OK
 }
 
 /// Use file zpm-registry.yaml in InstallDirectory
@@ -412,8 +424,63 @@ Storage Default
 </Data>
 <DataLocation>^ZPM.UpLinkD</DataLocation>
 <DefaultData>UpLinkDefaultData</DefaultData>
+<ExtentSize>1</ExtentSize>
 <IdLocation>^ZPM.UpLinkD</IdLocation>
 <IndexLocation>^ZPM.UpLinkI</IndexLocation>
+<Property name="%%CLASSNAME">
+<AverageFieldSize>2</AverageFieldSize>
+<OutlierSelectivity>.999999:</OutlierSelectivity>
+<Selectivity>0.0001%</Selectivity>
+</Property>
+<Property name="%%ID">
+<AverageFieldSize>3</AverageFieldSize>
+<Selectivity>1</Selectivity>
+</Property>
+<Property name="Active">
+<AverageFieldSize>3</AverageFieldSize>
+<OutlierSelectivity>.999999:1</OutlierSelectivity>
+<Selectivity>0.0001%</Selectivity>
+</Property>
+<Property name="Host">
+<AverageFieldSize>31</AverageFieldSize>
+<Selectivity>1</Selectivity>
+</Property>
+<Property name="Location">
+<AverageFieldSize>2</AverageFieldSize>
+<OutlierSelectivity>.999999:</OutlierSelectivity>
+<Selectivity>0.0001%</Selectivity>
+</Property>
+<Property name="Name">
+<AverageFieldSize>4</AverageFieldSize>
+<OutlierSelectivity>.999999:"pm"</OutlierSelectivity>
+<Selectivity>0.0001%</Selectivity>
+</Property>
+<Property name="PackagesAllowlist">
+<AverageFieldSize>32</AverageFieldSize>
+<OutlierSelectivity>.999999:"zpm*,yaml-utils*,?u*,fast-http"</OutlierSelectivity>
+<Selectivity>0.0001%</Selectivity>
+</Property>
+<Property name="Port">
+<AverageFieldSize>2</AverageFieldSize>
+<OutlierSelectivity>.999999:</OutlierSelectivity>
+<Selectivity>0.0001%</Selectivity>
+</Property>
+<Property name="Position">
+<AverageFieldSize>3</AverageFieldSize>
+<OutlierSelectivity>.999999:1</OutlierSelectivity>
+<Selectivity>0.0001%</Selectivity>
+</Property>
+<Property name="SSL">
+<AverageFieldSize>3</AverageFieldSize>
+<OutlierSelectivity>.999999:1</OutlierSelectivity>
+<Selectivity>0.0001%</Selectivity>
+</Property>
+<SQLMap name="HostIndex">
+<BlockCount>-4</BlockCount>
+</SQLMap>
+<SQLMap name="IDKEY">
+<BlockCount>-4</BlockCount>
+</SQLMap>
 <StreamLocation>^ZPM.UpLinkS</StreamLocation>
 <Type>%Storage.Persistent</Type>
 }
