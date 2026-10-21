@@ -17,3 +17,6 @@ mode: patch
 packages:
   - id: trifour-zpm-registry
     description: "Trifour's channel-aware fork of the ZPM registry"
+    # Scratch-namespace smoke scripts (they kill ^ZPM*); never ship them in the package.
+    exclude:
+      - "tests/**"
