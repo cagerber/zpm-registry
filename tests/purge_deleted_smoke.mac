@@ -1,0 +1,17 @@
+// SCRATCH NAMESPACE ONLY: the first line KILLS every ^ZPM* global. Smoke test for ZPM.Package.PurgeDeleted.
+set g="^ZPM" for { set g=$o(^$GLOBAL(g)) quit:$e(g,1,4)'="^ZPM"  kill @g } write "RESET",!
+for i=1:1:5 { set blob=$system.Encryption.GenCryptRand(20000) set p=##class(ZPM.Package).%New(),p.name="purge-dummy",p.channel="incubating",p.version="0.0."_i,p.description="dummy" for k=1:1:10 { do p.package.Write(blob) } do p.manifest.Write("<Module>"_i_"</Module>") do p.dependencies.SetAt("1.0.0","dep-x") set sc=p.%Save() write:'sc "SAVEFAIL ",i,! }
+set ^||m="set t=0,g=""^ZPM"" for { set g=$o(^$GLOBAL(g)) quit:$e(g,1,4)'=""^ZPM""  set n=g for { set n=$query(@n) quit:n=""""  set t=t+$l(@n) } set:$d(@g)#2 t=t+$l(@g) } write ""ZPMBYTES "",lbl,"" "",t,!"
+set lbl="before_soft" xecute ^||m
+for v="0.0.1","0.0.2","0.0.3" { write "SOFT ",v," ",##class(ZPM.Package).DeletePackageVersion("purge-dummy",v,"incubating"),! }
+set lbl="after_soft" xecute ^||m
+set j={}.%FromJSON(##class(ZPM.Package).PurgeDeleted(1,0,,,.sc)) write "DRY purged=",j.purged," bytes=",j.bytes," remaining=",j.remaining," v1bytes=",j.rows.%Get(0).bytes," sc=",sc,!
+set lbl="after_dry" xecute ^||m
+set j={}.%FromJSON(##class(ZPM.Package).PurgeDeleted(0,2,,,.sc)) write "CAP2 purged=",j.purged," bytes=",j.bytes," remaining=",j.remaining," sc=",sc,!
+set lbl="after_cap2" xecute ^||m
+set j={}.%FromJSON(##class(ZPM.Package).PurgeDeleted(0,0,,,.sc)) write "REST purged=",j.purged," bytes=",j.bytes," remaining=",j.remaining," sc=",sc,!
+set j={}.%FromJSON(##class(ZPM.Package).PurgeDeleted(0,0,,,.sc)) write "AGAIN purged=",j.purged," bytes=",j.bytes," sc=",sc,!
+set lbl="after_purge" xecute ^||m
+set rs=##class(%SQL.Statement).%ExecDirect(,"SELECT version,deleted FROM ZPM.Package ORDER BY version") while rs.%Next() { write "ROW ",rs.version," deleted=",rs.deleted,! }
+set p=##class(ZPM.Package).NameChannelVersionOpen("purge-dummy","incubating","0.0.5") write "LIVE5 size=",p.package.Size," manifest=",p.manifest.Read()," dep=",p.dependencies.GetAt("dep-x"),!
+set g="^ZPM" for { set g=$o(^$GLOBAL(g)) quit:$e(g,1,4)'="^ZPM"  write "GLOBAL ",g,! }

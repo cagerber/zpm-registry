@@ -71,3 +71,12 @@ delete-enabled: true
 
 
 
+
+## Hard purge of soft-deleted versions (trifour 1.3.11)
+
+`DeletePackageVersion` only sets `deleted = 1`. The tgz, manifest and installer streams stay in
+`^ZPM.PackageS`, so a soft delete frees no space. `ZPM.Package.PurgeDeleted(dryRun=1, maxVersions=0, pkg="", channel="", .sc)`
+physically removes rows that are already soft-deleted (data node, `dependencies` subnode, index
+entries and streams). It returns JSON listing bytes per version. It is idempotent: it only ever
+touches `deleted = 1` rows and re-checks each row when opening it. `maxVersions` caps the rows per call so
+journal growth stays bounded. Afterwards, compact and truncate the database to give the space back to the OS.

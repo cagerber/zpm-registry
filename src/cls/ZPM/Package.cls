@@ -878,6 +878,70 @@ GROUP BY name, channel
 ORDER BY name, channel
 }
 
+/// Hard purge: physically remove rows ALREADY soft-deleted (<code>deleted = 1</code>) by
+/// <method>DeletePackageVersion</method>, together with their package tgz, manifest and
+/// installer streams (<code>^ZPM.PackageS</code>) and their <code>dependencies</code> subnode.
+/// <p>A soft delete only hides a version from IPM; its bytes stay in the database. This is the
+/// step that actually frees space (the database file still needs compact + truncate to give
+/// it back to the OS).
+/// <ul>
+/// <li><var>dryRun</var> (default 1): report only, delete nothing.</li>
+/// <li><var>maxVersions</var>: cap rows purged per call (0 = no cap); bounds journal growth.</li>
+/// <li><var>pkg</var> / <var>channel</var>: optional scope.</li>
+/// </ul>
+/// Idempotent: only <code>deleted = 1</code> rows are ever touched, so a re-run after a
+/// partial run continues where it stopped and a run with nothing to do is a no-op.
+/// Live rows (<code>deleted</code> 0 or NULL) are never selected.
+/// <p>Returns a JSON string: <code>{"dryRun":..,"purged":n,"bytes":n,"remaining":n,"rows":[{"name","channel","version","bytes"}]}</code>.
+ClassMethod PurgeDeleted(dryRun As %Boolean = 1, maxVersions As %Integer = 0, pkg As %String = "", channel As %String = "", Output pStatus As %Status) As %String
+{
+  Set pStatus = $$$OK
+  Set out = {"dryRun":(''dryRun), "purged":0, "bytes":0, "remaining":0, "rows":[]}
+  Set sql = "SELECT name, channel, version FROM ZPM.Package WHERE deleted = 1"
+  Set args = 0
+  If pkg'="" Set sql = sql_" AND name = ?", args = args + 1, args(args) = pkg
+  If channel'="" Set sql = sql_" AND channel = ?", args = args + 1, args(args) = channel
+  Set sql = sql_" ORDER BY name, channel, versionMajor, versionMinor, versionPatch"
+  Set rs = ##class(%SQL.Statement).%ExecDirect(, sql, args...)
+  If rs.%SQLCODE < 0 {
+    Set pStatus = $$$ERROR($$$SQLError, rs.%SQLCODE, rs.%Message)
+    Return out.%ToJSON()
+  }
+  Set n = 0, total = 0, remaining = 0
+  While rs.%Next() {
+    If (maxVersions > 0) && (n >= maxVersions) {
+      Set remaining = remaining + 1
+      Continue
+    }
+    Set name = rs.name, ch = rs.channel, ver = rs.version
+    Set p = ..NameChannelVersionOpen(name, ch, ver, 0, .tSC)
+    If '$IsObject(p) {
+      Set pStatus = $$$ADDSC(pStatus, tSC)
+      Continue
+    }
+    // re-check under the open: never purge a row that was revived since the SELECT
+    If p.deleted '= 1 Continue
+    Set bytes = 0
+    Set:$IsObject(p.package) bytes = bytes + p.package.Size
+    Set:$IsObject(p.manifest) bytes = bytes + p.manifest.Size
+    Set:$IsObject(p.installer) bytes = bytes + p.installer.Size
+    Kill p
+    If 'dryRun {
+      // %DeleteId removes the data node, the dependencies subnode, the index entries and
+      // every stream property's ^ZPM.PackageS chunks.
+      Set tSC = ..NameChannelVersionDelete(name, ch, ver)
+      If $$$ISERR(tSC) {
+        Set pStatus = $$$ADDSC(pStatus, tSC)
+        Continue
+      }
+    }
+    Set n = n + 1, total = total + bytes
+    Do out.rows.%Push({"name":(name), "channel":(ch), "version":(ver), "bytes":(bytes)})
+  }
+  Set out.purged = n, out.bytes = total, out.remaining = remaining
+  Return out.%ToJSON()
+}
+
 Storage Default
 {
 <Data name="PackageDefaultData">
