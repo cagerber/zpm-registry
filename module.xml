@@ -17,6 +17,7 @@
       <Resource Name="ZPM.PKG"/>
       <Invoke Class="ZPM.Utils" Method="SQLsetup"></Invoke>
       <Invoke Class="ZPM.Utils" Method="AddSSLConfiguration"></Invoke>
+      <Invoke Class="ZPM.Task.Retention" Method="Install"></Invoke>
       <CSPApplication 
         Url="/registry"
         Path="/src"

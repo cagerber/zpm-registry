@@ -887,13 +887,13 @@ ORDER BY name, channel
 /// <ul>
 /// <li><var>dryRun</var> (default 1): report only, delete nothing.</li>
 /// <li><var>maxVersions</var>: cap rows purged per call (0 = no cap); bounds journal growth.</li>
-/// <li><var>pkg</var> / <var>channel</var>: optional scope.</li>
+/// <li><var>pkg</var> / <var>channel</var> / <var>version</var>: optional scope.</li>
 /// </ul>
 /// Idempotent: only <code>deleted = 1</code> rows are ever touched, so a re-run after a
 /// partial run continues where it stopped and a run with nothing to do is a no-op.
 /// Live rows (<code>deleted</code> 0 or NULL) are never selected.
 /// <p>Returns a JSON string: <code>{"dryRun":..,"purged":n,"bytes":n,"remaining":n,"rows":[{"name","channel","version","bytes"}]}</code>.
-ClassMethod PurgeDeleted(dryRun As %Boolean = 1, maxVersions As %Integer = 0, pkg As %String = "", channel As %String = "", Output pStatus As %Status) As %String
+ClassMethod PurgeDeleted(dryRun As %Boolean = 1, maxVersions As %Integer = 0, pkg As %String = "", channel As %String = "", Output pStatus As %Status, version As %String = "") As %String
 {
   Set pStatus = $$$OK
   Set out = {"dryRun":(''dryRun), "purged":0, "bytes":0, "remaining":0, "rows":[]}
@@ -901,6 +901,7 @@ ClassMethod PurgeDeleted(dryRun As %Boolean = 1, maxVersions As %Integer = 0, pk
   Set args = 0
   If pkg'="" Set sql = sql_" AND name = ?", args = args + 1, args(args) = pkg
   If channel'="" Set sql = sql_" AND channel = ?", args = args + 1, args(args) = channel
+  If version'="" Set sql = sql_" AND version = ?", args = args + 1, args(args) = version
   Set sql = sql_" ORDER BY name, channel, versionMajor, versionMinor, versionPatch"
   Set rs = ##class(%SQL.Statement).%ExecDirect(, sql, args...)
   If rs.%SQLCODE < 0 {

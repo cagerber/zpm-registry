@@ -1,0 +1,10 @@
+// SCRATCH NAMESPACE ONLY: kills every ^ZPM* global. Smoke test for ZPM.Task.Retention (expect 4 removed, pin + not-allowed + newest 3 kept).
+set g="^ZPM" for { set g=$o(^$GLOBAL(g)) quit:$e(g,1,4)'="^ZPM"  kill @g } write "RESET",!
+for i=1:1:8 { set p=##class(ZPM.Package).%New(),p.name="rt-a",p.channel="incubating",p.version="1.0."_i do p.package.Write($system.Encryption.GenCryptRand(50000)) set sc=p.%Save() write:'sc "SAVEFAIL a",i,! }
+for i=1:1:4 { set p=##class(ZPM.Package).%New(),p.name="rt-b",p.channel="incubating",p.version="1.0."_i do p.package.Write($system.Encryption.GenCryptRand(50000)) set sc=p.%Save() write:'sc "SAVEFAIL b",i,! }
+write "PRESOFT ",##class(ZPM.Package).DeletePackageVersion("rt-a","1.0.1","incubating"),!
+set j={"pins":[["rt-a","incubating","1.0.2","test:pin"]],"allow":[["rt-a","incubating","1.0.1","/c/1"],["rt-a","incubating","1.0.2","/c/2"],["rt-a","incubating","1.0.3","/c/3"],["rt-a","incubating","1.0.4","/c/4"],["rt-a","incubating","1.0.6","/c/6"],["rt-a","incubating","1.0.7","/c/7"],["rt-b","incubating","1.0.1","/c/b1"]]} write "INPUTS ",##class(ZPM.Task.Retention).SetInputs(j.%ToJSON()),!
+set ^||m="set t=0,n=""^ZPM.PackageS"" for { set n=$query(@n) quit:n=""""  set t=t+$l(@n) } write ""STREAMBYTES "",lbl,"" "",t,!" set lbl="before" xecute ^||m
+set d=##class(ZPM.Task.Retention).%New(),d.DryRun=1 write "DRYRUN ",d.OnTask()," log=",$lts(^ZPM.RetentionLog(^ZPM.RetentionLog)),!
+write "INSTALL ",##class(ZPM.Task.Retention).Install(),! write "INSTALL2 ",##class(ZPM.Task.Retention).Install(),!
+&sql(SELECT ID, Suspended, DailyStartTime, NameSpace INTO :tid,:sus,:st,:ns FROM %SYS.Task WHERE TaskClass='ZPM.Task.Retention') write "TASK id=",tid," suspended=",sus," start=",st," ns=",ns," count=",SQLCODE,!

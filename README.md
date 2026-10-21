@@ -80,3 +80,12 @@ physically removes rows that are already soft-deleted (data node, `dependencies`
 entries and streams). It returns JSON listing bytes per version. It is idempotent: it only ever
 touches `deleted = 1` rows and re-checks each row when opening it. `maxVersions` caps the rows per call so
 journal growth stays bounded. Afterwards, compact and truncate the database to give the space back to the OS.
+
+## Retention task (`ZPM.Task.Retention`)
+
+Installing the module creates or updates the task (idempotently): "ZPM Registry Retention (<ns>)",
+daily at 02:00 server time, enabled. Defaults: KeepLatest=3, Cap=300, DryRun=0, MaxInputAgeHours=48.
+It acts only on versions in `^ZPM.RetentionAllow` (cache-verified by the client) and never on
+`^ZPM.RetentionPins` or a (name, channel)'s newest KeepLatest live versions. It soft-deletes and then
+calls `PurgeDeleted` per version. Each run logs to `^ZPM.RetentionLog`. The client fills the inputs with
+`ipm_registry_cli.py remove ... --write-task-inputs` (`SetInputs`); inputs older than 48h are refused.
