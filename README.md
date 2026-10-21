@@ -72,7 +72,7 @@ delete-enabled: true
 
 
 
-## Hard purge of soft-deleted versions (trifour 1.3.11)
+## Hard purge of soft-deleted versions (trifour 1.3.12)
 
 `DeletePackageVersion` only sets `deleted = 1`. The tgz, manifest and installer streams stay in
 `^ZPM.PackageS`, so a soft delete frees no space. `ZPM.Package.PurgeDeleted(dryRun=1, maxVersions=0, pkg="", channel="", .sc)`
