@@ -173,12 +173,13 @@ ClassMethod PackageManifest(pkg As %String = "", version As %String = "", platfo
     Set package = ##class(ZPM.Package).NameChannelVersionOpen(pkg, channel, version)
   }
 
-  If ('$IsObject(package))||('package.manifest.Size)||(package.deleted=1) {
+  Set manifestStream = package.GetManifestStream()
+  If ('$IsObject(package))||('$IsObject(manifestStream))||('manifestStream.Size)||(package.deleted=1) {
     Return ..ReportHttpStatusCode(..#HTTP404NOTFOUND)
   }
 
   Set %response.ContentType = "text/xml"
-  Return ..%ProcessResult($$$OK, package.manifest)
+  Return ..%ProcessResult($$$OK, manifestStream)
 }
 
 ClassMethod PackageInstaller(pkg As %String = "", version As %String = "") As %Status
@@ -194,11 +195,12 @@ ClassMethod PackageInstaller(pkg As %String = "", version As %String = "") As %S
   If ('$IsObject(package)||(package.deleted=1)) {
     Return ..ReportHttpStatusCode(..#HTTP404NOTFOUND)
   }
-  If package.installer.Size {
+  Set installerStream = package.GetInstallerStream()
+  If $IsObject(installerStream) && installerStream.Size {
     Set filename = pkg_"-"_version_".xml"
     Set %response.ContentType = "text/xml"
     Do %response.SetHeader("Content-Disposition", "attachment; filename="""_filename_"""")
-    Return ..%ProcessResult($$$OK, package.installer)
+    Return ..%ProcessResult($$$OK, installerStream)
   }
   Return ..ReportHttpStatusCode(..#HTTP404NOTFOUND)
 }
@@ -331,7 +333,11 @@ ClassMethod AdminPublishPackage() As %Status
   If '##class(%File).Exists(manifestPath) {
     Return ..ReportHttpStatusCode(..#HTTP400BADREQUEST, $$$ERROR(5001,"module.xml not found: "_manifestPath))
   }
-  Set tSC = ##class(ZPM.Package).LoadPackageFromArchive(archivePath, manifestPath, "", 1, .name, .version)
+  Set channel = %request.Content.%Get("channel")
+  If channel = "" {
+    Return ..ReportHttpStatusCode(..#HTTP400BADREQUEST, $$$ERROR(5001,"channel is required"))
+  }
+  Set tSC = ##class(ZPM.Package).LoadPackageFromArchive(archivePath, manifestPath, channel, "", 1, .name, .version)
   If $$$ISERR(tSC) {
     Return ..ReportHttpStatusCode(..#HTTP500INTERNALSERVERERROR, tSC)
   }
@@ -483,7 +489,10 @@ ClassMethod GetArchive(name, platformVersion, fileName) As %Status
   Set ^IRIS.TempZPMRInst(token) = $ListBuild(name, version, channel)
   Do %response.SetHeader("INSTALLTOKEN",token)
 
-  Set tStream = package.package
+  Set tStream = package.GetPackageStream()
+  If '$IsObject(tStream) {
+    Return ..ReportHttpStatusCode(..#HTTP404NOTFOUND)
+  }
   Set %response.NoCharSetConvert = 1
   Set %response.CharSet = "RAW"
   Set %response.ContentType = "application/tar+gzip"
