@@ -42,7 +42,7 @@ Index Repository On repository;
 
 Property dependencies As array Of %String;
 
-Property package As %Stream.Object(%JSONINCLUDE = "NONE");
+Property package As %Stream.GlobalBinary(%JSONINCLUDE = "NONE");
 
 Property size As %Integer(%JSONINCLUDE = "OUTPUTONLY");
 
@@ -91,8 +91,12 @@ Method nameSet(value As %String) As %Status
 Method sizeGet() As %Integer
 {
   Set stream = ..GetPackageStream()
-  Return:'$IsObject(stream) ""
-  Return:'stream.Size ""
+  If '$IsObject(stream) {
+    Return ""
+  }
+  If 'stream.Size {
+    Return ""
+  }
   Return stream.Size
 }
 
@@ -151,10 +155,8 @@ Method PersistStreamsToDisk() As %Status
     Set path = ##class(ZPM.PackageStorage).ArchivePath(..name, ..channel, ..version)
     Set sc = ..InstallStreamPropertyToFile(..package, path, .errMsg)
     If $$$ISERR(sc) Return sc
-    Set fb = ##class(%Stream.FileBinary).%New()
-    Set sc = fb.LinkToFile(path)
-    If $$$ISERR(sc) Return sc
-    Set ..package = fb
+    // Keep GlobalBinary typed property empty once bytes are on disk; readers use GetPackageStream().
+    Do ..package.Clear()
   }
   If $IsObject(..manifest) && ..manifest.Size {
     Set path = ##class(ZPM.PackageStorage).ManifestPath(..name, ..channel, ..version)
@@ -247,10 +249,9 @@ Method packageFromBase64(base64 As %Stream.DynamicBinary) As %Status
     Do ##class(%File).Delete(tmpPath)
     Return $$$ERROR($$$GeneralError, "unable to finalize package archive")
   }
-  Set fb = ##class(%Stream.FileBinary).%New()
-  Set sc = fb.LinkToFile(path)
-  If $$$ISERR(sc) Return sc
-  Set ..package = fb
+  If $IsObject(..package) {
+    Do ..package.Clear()
+  }
   Set ..hash = $$$lcase(##class(%File).SHA1Hash(path, 1))
   Return $$$OK
 }
@@ -516,7 +517,9 @@ Method UpdateDescriptionFromManifest() As %Status
 {
   Try {
     Set manifestStream = ..GetManifestStream()
-    Quit:'$IsObject(manifestStream) manifestStream.Size
+    If '$IsObject(manifestStream) {
+      Return $$$OK
+    }
     $$$ThrowOnError(##class(%XML.XPATH.Document).CreateFromStream(manifestStream, .tDocument))
     $$$ThrowOnError(tDocument.EvaluateExpression("/Module/Description", "text()", .tRes))
     If (tRes.Count()>0) {
@@ -636,8 +639,8 @@ ClassMethod LoadPackageFromArchive(archivePath As %String, manifestPath As %Stri
   Set package.repository = repository
   Set package.version = version
   Set archive = ##class(%Stream.FileBinary).%New()
-  Set sc = archive.LinkToFile(archiveDest)
-  If $$$ISERR(sc) Return sc
+  Set tSC = archive.LinkToFile(archiveDest)
+  If $$$ISERR(tSC) Return tSC
   Set package.package = archive
   Set module = ##class(ZPM.PackageStorage).OpenDiskCharacter(manifestDest)
   If '$IsObject(module) Return $$$ERROR($$$GeneralError, "unable to open manifest on disk")
@@ -1110,15 +1113,10 @@ ClassMethod ClearMigratedPackageGlobals(dryRun As %Boolean = 1, maxVersions As %
       Continue
     }
     If 'dryRun {
-      Set path = ##class(ZPM.PackageStorage).ArchivePath(name, ch, ver)
-      Set fb = ##class(%Stream.FileBinary).%New()
-      Set tSC = fb.LinkToFile(path)
-      If $$$ISERR(tSC) {
-        Set pStatus = $$$ADDSC(pStatus, tSC)
-        Kill p
-        Continue
+      If $IsObject(p.package) {
+        Do p.package.Clear()
       }
-      Set p.package = fb
+      // Skip %OnBeforeSave disk rewrite: package already empty / on disk.
       Set tSC = p.%Save()
       If $$$ISERR(tSC) {
         Set pStatus = $$$ADDSC(pStatus, tSC)
