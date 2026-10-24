@@ -42,7 +42,7 @@ Index Repository On repository;
 
 Property dependencies As array Of %String;
 
-Property package As %Stream.GlobalBinary(%JSONINCLUDE = "NONE");
+Property package As %Stream.Object(%JSONINCLUDE = "NONE");
 
 Property size As %Integer(%JSONINCLUDE = "OUTPUTONLY");
 
@@ -90,20 +90,169 @@ Method nameSet(value As %String) As %Status
 
 Method sizeGet() As %Integer
 {
-  Return:'..package.Size ""
-  Return ..package.Size
+  Set stream = ..GetPackageStream()
+  Return:'$IsObject(stream) ""
+  Return:'stream.Size ""
+  Return stream.Size
+}
+
+/// Package archive for download/hash: on-disk file when present, else legacy ^ZPM.PackageS stream.
+Method GetPackageStream() As %Stream.Object
+{
+  If ##class(ZPM.PackageStorage).DiskArchiveExists(..name, ..channel, ..version) {
+    Return ##class(ZPM.PackageStorage).OpenDiskArchive(..name, ..channel, ..version)
+  }
+  If $IsObject(..package) {
+    Do ..package.Rewind()
+    If ..package.Size {
+      Return ..package
+    }
+  }
+  Return ""
+}
+
+Method GetManifestStream() As %Stream.Object
+{
+  Set path = ##class(ZPM.PackageStorage).ManifestPath(..name, ..channel, ..version)
+  If ##class(%File).Exists(path) {
+    Return ##class(ZPM.PackageStorage).OpenDiskCharacter(path)
+  }
+  If $IsObject(..manifest) {
+    Do ..manifest.Rewind()
+    If ..manifest.Size {
+      Return ..manifest
+    }
+  }
+  Return ""
+}
+
+Method GetInstallerStream() As %Stream.Object
+{
+  Set path = ##class(ZPM.PackageStorage).InstallerPath(..name, ..channel, ..version)
+  If ##class(%File).Exists(path) {
+    Return ##class(ZPM.PackageStorage).OpenDiskCharacter(path)
+  }
+  If $IsObject(..installer) {
+    Do ..installer.Rewind()
+    If ..installer.Size {
+      Return ..installer
+    }
+  }
+  Return ""
+}
+
+Method PersistStreamsToDisk() As %Status
+{
+  Set errMsg = ""
+  If '##class(ZPM.PackageStorage).EnsureVersionDirectory(..name, ..channel, ..version, .errMsg) {
+    Return $$$ERROR($$$GeneralError, errMsg)
+  }
+  If $IsObject(..package) && ..package.Size {
+    Set path = ##class(ZPM.PackageStorage).ArchivePath(..name, ..channel, ..version)
+    Set sc = ..InstallStreamPropertyToFile(..package, path, .errMsg)
+    If $$$ISERR(sc) Return sc
+    Set fb = ##class(%Stream.FileBinary).%New()
+    Set sc = fb.LinkToFile(path)
+    If $$$ISERR(sc) Return sc
+    Set ..package = fb
+  }
+  If $IsObject(..manifest) && ..manifest.Size {
+    Set path = ##class(ZPM.PackageStorage).ManifestPath(..name, ..channel, ..version)
+    Set sc = ..InstallStreamPropertyToFile(..manifest, path, .errMsg)
+    If $$$ISERR(sc) Return sc
+    Set fc = ##class(ZPM.PackageStorage).OpenDiskCharacter(path)
+    If $IsObject(fc) Set ..manifest = fc
+  }
+  If $IsObject(..installer) && ..installer.Size {
+    Set path = ##class(ZPM.PackageStorage).InstallerPath(..name, ..channel, ..version)
+    Set sc = ..InstallStreamPropertyToFile(..installer, path, .errMsg)
+    If $$$ISERR(sc) Return sc
+    Set fc = ##class(ZPM.PackageStorage).OpenDiskCharacter(path)
+    If $IsObject(fc) Set ..installer = fc
+  }
+  Return $$$OK
+}
+
+/// Prefer a host file copy when the stream is already backed by a file; otherwise copy stream bytes unchanged.
+Method InstallStreamPropertyToFile(stream As %Stream.Object, destPath As %String, Output errMsg As %String) As %Status [ Private ]
+{
+  Set errMsg = ""
+  Set destPath = ##class(%File).NormalizeFilename(destPath)
+  If stream.%IsA("%Stream.FileBinary") {
+    Set src = ##class(%File).NormalizeFilename(stream.Filename)
+    If (src = destPath) && ##class(%File).Exists(destPath) {
+      Return $$$OK
+    }
+    If ##class(%File).Exists(src) {
+      Return ##class(ZPM.PackageStorage).InstallFileFromPath(src, destPath, .errMsg)
+    }
+  }
+  If stream.%IsA("%Stream.FileCharacter") && (stream.Filename '= "") {
+    Set src = ##class(%File).NormalizeFilename(stream.Filename)
+    If (src = destPath) && ##class(%File).Exists(destPath) {
+      Return $$$OK
+    }
+    If ##class(%File).Exists(src) {
+      Return ##class(ZPM.PackageStorage).InstallFileFromPath(src, destPath, .errMsg)
+    }
+  }
+  Set bytes = 0
+  Return ##class(ZPM.PackageStorage).CopyStreamToFile(stream, destPath, .bytes, .errMsg)
+}
+
+Method %OnBeforeSave(insert As %Boolean) As %Status
+{
+  If (..name = "") || (..channel = "") || (..version = "") {
+    Return $$$OK
+  }
+  Return ..PersistStreamsToDisk()
 }
 
 Method packageFromBase64(base64 As %Stream.DynamicBinary) As %Status
 {
+  If (..name = "") || (..channel = "") || (..version = "") {
+    Return $$$ERROR($$$GeneralError, "name, channel and version required before package payload")
+  }
+  Set errMsg = ""
+  If '##class(ZPM.PackageStorage).EnsureVersionDirectory(..name, ..channel, ..version, .errMsg) {
+    Return $$$ERROR($$$GeneralError, errMsg)
+  }
+  Set path = ##class(ZPM.PackageStorage).ArchivePath(..name, ..channel, ..version)
+  Set tmpPath = path _ ".writing"
+  If ##class(%File).Exists(tmpPath) {
+    Do ##class(%File).Delete(tmpPath)
+  }
   Set sc = $$$OK
-  Do ..package.Clear()
+  Set out = ##class(%Stream.FileBinary).%New()
+  Set sc = out.LinkToFile(tmpPath)
+  If $$$ISERR(sc) Return sc
   Do base64.Rewind()
   While 'base64.AtEnd {
-    Set tSC = ..package.Write($System.Encryption.Base64Decode(base64.Read(43540, .sc))) 
-    Set:$$$ISERR(tSC) sc = $$$ADDSC(sc,tSC)
+    Set tSC = out.Write($System.Encryption.Base64Decode(base64.Read(43540, .sc)))
+    Set:$$$ISERR(tSC) sc = $$$ADDSC(sc, tSC)
   }
-  Quit sc
+  If $$$ISERR(sc) {
+    Do ##class(%File).Delete(tmpPath)
+    Return sc
+  }
+  Set sc = out.%Save()
+  If $$$ISERR(sc) {
+    Do ##class(%File).Delete(tmpPath)
+    Return sc
+  }
+  If ##class(%File).Exists(path) {
+    Do ##class(%File).Delete(path)
+  }
+  If '##class(%File).Rename(tmpPath, path) {
+    Do ##class(%File).Delete(tmpPath)
+    Return $$$ERROR($$$GeneralError, "unable to finalize package archive")
+  }
+  Set fb = ##class(%Stream.FileBinary).%New()
+  Set sc = fb.LinkToFile(path)
+  If $$$ISERR(sc) Return sc
+  Set ..package = fb
+  Set ..hash = $$$lcase(##class(%File).SHA1Hash(path, 1))
+  Return $$$OK
 }
 
 Method filepathGet() As %String [ CodeMode = expression ]
@@ -222,7 +371,7 @@ ClassMethod VersionFind(pkg As %String = "", version As %String = "", pPrereleas
       If SQLCODE=0 { 
         Set package = ##class(ZPM.Package).%OpenId(pkg_"||"_mirrorChannel_"||"_version)
         If ('$IsObject(package)) { Return ""}
-        If (package.manifest.Size) { Return version }
+        If ($IsObject(package.GetManifestStream()) && package.GetManifestStream().Size) { Return version }
         Do ##class(ZPM.UpLink).LoadPackageFromAllUpLinks(pkg, version)
         Return version
       } 
@@ -233,7 +382,7 @@ ClassMethod VersionFind(pkg As %String = "", version As %String = "", pPrereleas
     If ..%ExistsId(pkg _ "||" _ channel _ "||" _ version) {
       Set package = ##class(ZPM.Package).%OpenId(pkg_"||"_channel_"||"_version)
       If ('$IsObject(package)) { Return ""}
-      If (package.manifest.Size) { Return version }
+      If ($IsObject(package.GetManifestStream()) && package.GetManifestStream().Size) { Return version }
     } 
     Do ##class(ZPM.UpLink).LoadPackageFromAllUpLinks(pkg, version)
     If ..%ExistsId(pkg _ "||" _ mirrorChannel _ "||" _ version) {
@@ -292,6 +441,8 @@ ClassMethod DeleteExistingPackages(pkg As %String, version As %String, channel A
   // delete all "proxy" packages FOR THIS CHANNEL: proxies are per-channel too, since
   // the same upstream module may be mirrored into several channels.
   &sql(DELETE FROM ZPM.Package WHERE Name = :pkg AND channel = :channel AND UpLink IS NOT NULL)
+  Set tSC = ##class(ZPM.PackageStorage).DeleteVersionDirectory(pkg, channel, version)
+  Return:$$$ISERR(tSC) tSC
   Set tSC = ..NameChannelVersionDelete(pkg, channel, version)
   Return:$$$ISERR(tSC) tSC
 
@@ -364,8 +515,9 @@ ClassMethod Populate(Path As %String, kill = 0, channel As %String = "")
 Method UpdateDescriptionFromManifest() As %Status
 {
   Try {
-    Quit:'..manifest.Size
-    $$$ThrowOnError(##class(%XML.XPATH.Document).CreateFromStream(..manifest, .tDocument))
+    Set manifestStream = ..GetManifestStream()
+    Quit:'$IsObject(manifestStream) manifestStream.Size
+    $$$ThrowOnError(##class(%XML.XPATH.Document).CreateFromStream(manifestStream, .tDocument))
     $$$ThrowOnError(tDocument.EvaluateExpression("/Module/Description", "text()", .tRes))
     If (tRes.Count()>0) {
       Set ..description = tRes.GetAt(1).Value
@@ -379,112 +531,7 @@ Method UpdateDescriptionFromManifest() As %Status
 
 ClassMethod LoadPackage(Path As %String, channel As %String, repository As %String = "", silent As %Boolean = 0) As %Status
 {
-  Set tStream = ##class(%Stream.FileCharacter).%New()
-  Set moduleFile = ##class(%File).NormalizeFilename("module.xml", Path)
-  If '##class(%File).Exists(moduleFile) {
-    Set Path = ##class(%File).NormalizeDirectory("latest", Path)
-    Set moduleFile = ##class(%File).NormalizeFilename("module.xml", Path)
-  }
-  If ('silent) {
-    Write !!,"Path: ",Path
-    Write !!,"ModuleFile: ",moduleFile
-  }
-  Set tSC = ##class(%XML.XPATH.Document).CreateFromFile(moduleFile, .tDocument)
-  If $$$ISERR(tSC) Return tSC
-
-  Set tSC=tDocument.EvaluateExpression("/Export/Document/Module/Name", "text()", .tRes)
-  If $$$ISERR(tSC) Return tSC
-  If '$IsObject(tRes.GetAt(1)) {
-    Return $$$ERROR($$$GeneralError, "Name required")
-  }
-  Set name = tRes.GetAt(1).Value
-  Set name = $$$lcase(name)
-  If ('silent) {
-    Write !,"Name: ", name
-  }
-
-  Set tSC=tDocument.EvaluateExpression("/Export/Document/Module/Version", "text()", .tRes)
-  If $$$ISERR(tSC) Return tSC
-  If '$IsObject(tRes.GetAt(1)) {
-    Return $$$ERROR($$$GeneralError, "Version required")
-  }
-  Set version = tRes.GetAt(1).Value
-  If ('silent) {
-    Write !,"Version: ", version
-  }
-
-  Set description = ""
-  Set tSC=tDocument.EvaluateExpression("/Export/Document/Module/Description", "text()", .tRes)
-  If $$$ISERR(tSC) Return tSC
-  If $IsObject(tRes.GetAt(1)) {
-    Set description = tRes.GetAt(1).Value
-  }
-
-  // Trifour fork (9-373): persist module.xml <Keywords> on the record so
-  // package metadata (incl. our sha256 content marker) survives LoadPackage
-  // and is exposed by the %JSON.Adaptor listing. Handles both the list form
-  // (<Keywords><Keyword>a</Keyword>...</Keywords>) and the single-text form
-  // (<Keywords>a,b</Keywords>).
-  Set keywords = ""
-  Set tSC=tDocument.EvaluateExpression("/Export/Document/Module/Keywords/Keyword", "text()", .tRes)
-  If $$$ISERR(tSC) Return tSC
-  If tRes.Count() > 0 {
-    For i=1:1:tRes.Count() {
-      Set kw = $ZStrip(tRes.GetAt(i).Value, "<>W")
-      If kw '= "" Set keywords = keywords _ $Select(keywords="":"",1:",") _ kw
-    }
-  }
-  If keywords = "" {
-    Set tSC=tDocument.EvaluateExpression("/Export/Document/Module/Keywords", "text()", .tRes)
-    If $$$ISERR(tSC) Return tSC
-    If $IsObject(tRes.GetAt(1)) Set keywords = tRes.GetAt(1).Value
-  }
-
-  Set archive = ##class(%Stream.FileBinary).%New()
-  Set archiveFileName = ##class(%File).TempFilename("tgz")
-  Set archive.Filename = archiveFileName
-
-  Set command = "cd " _ Path _ " && tar -zcvf " _ archiveFileName _ " . "
-
-  Set args = 0
-  Set res = $Zf(-100, "", "tar", "--exclude=.git", "-zcvf", archiveFileName, "-C",  Path, ".")
-  If ('silent) {
-    Write "ArchiveSize: " _ archive.Size
-  }
-
-  If (channel = "") {
-    Return $$$ERROR($$$GeneralError, "channel is required: one registry hosts every channel")
-  }
-  Do ..DeleteExistingPackages(name,version,channel)
-  Set package = ..%New()
-  Set package.channel = channel
-  Set package.name = name
-  Set package.description = description
-  Set keywords = $ZStrip(keywords,"<>W")
-  If keywords '= "" {
-    For i=1:1:$Length(keywords,",") {
-      Set kw = $ZStrip($Piece(keywords,",",i),"<>W")
-      If kw '= "" Do package.keywords.Insert(kw)
-    }
-  }
-  Set package.repository = repository
-  Set package.version = version
-  Set package.package = archive
-  Set module = ##class(%Stream.FileCharacter).%New()
-  Set module.Filename = moduleFile
-  // Trifour fork (9-373): module.xml is UTF-8 — bind the file stream with the
-  // UTF8 translate table, otherwise the default (ANSI/CP1252 on Windows) reads
-  // non-ASCII bytes (e.g. em-dash E2 80 94) as mojibake characters and re-encodes
-  // them to illegal-in-XML C1 control chars (U+0080/U+0094) on %Save, breaking
-  // the zpm client's manifest parse ("Download package manifest failed").
-  Set module.TranslateTable = "UTF8"
-  Set package.manifest = module
-  Set hash = $$$lcase(##class(%File).SHA1Hash(archiveFileName, 1))  
-  Set package.hash = hash
-  If ('silent) {
-    Write !,"ArchiveHash: " _ hash
-  }
-  Return package.%Save()
+  Return $$$ERROR($$$GeneralError, "LoadPackage no longer repackages unpacked directories; use LoadPackageFromArchive with the original .tgz and module.xml")
 }
 
 /// Trifour fork (dep-97): ingest a package from the ORIGINAL archive plus its
@@ -565,6 +612,16 @@ ClassMethod LoadPackageFromArchive(archivePath As %String, manifestPath As %Stri
     Return $$$ERROR($$$GeneralError, "channel is required: one registry hosts every channel")
   }
   Do ..DeleteExistingPackages(name,version,channel)
+  Set errMsg = ""
+  If '##class(ZPM.PackageStorage).EnsureVersionDirectory(name, channel, version, .errMsg) {
+    Return $$$ERROR($$$GeneralError, errMsg)
+  }
+  Set archiveDest = ##class(ZPM.PackageStorage).ArchivePath(name, channel, version)
+  Set manifestDest = ##class(ZPM.PackageStorage).ManifestPath(name, channel, version)
+  Set tSC = ##class(ZPM.PackageStorage).InstallFileFromPath(archivePath, archiveDest, .errMsg)
+  If $$$ISERR(tSC) Return tSC
+  Set tSC = ##class(ZPM.PackageStorage).InstallFileFromPath(manifestPath, manifestDest, .errMsg)
+  If $$$ISERR(tSC) Return tSC
   Set package = ..%New()
   Set package.channel = channel
   Set package.name = name
@@ -578,15 +635,14 @@ ClassMethod LoadPackageFromArchive(archivePath As %String, manifestPath As %Stri
   }
   Set package.repository = repository
   Set package.version = version
-  // The archive is stored exactly as supplied — no $zf tar round-trip.
   Set archive = ##class(%Stream.FileBinary).%New()
-  Set archive.Filename = archivePath
+  Set sc = archive.LinkToFile(archiveDest)
+  If $$$ISERR(sc) Return sc
   Set package.package = archive
-  Set module = ##class(%Stream.FileCharacter).%New()
-  Set module.Filename = manifestPath
-  Set module.TranslateTable = "UTF8"
+  Set module = ##class(ZPM.PackageStorage).OpenDiskCharacter(manifestDest)
+  If '$IsObject(module) Return $$$ERROR($$$GeneralError, "unable to open manifest on disk")
   Set package.manifest = module
-  Set hash = $$$lcase(##class(%File).SHA1Hash(archivePath, 1))
+  Set hash = $$$lcase(##class(%File).SHA1Hash(archiveDest, 1))
   Set package.hash = hash
   If ('silent) {
     Write !,"ArchiveSize: " _ archive.Size
@@ -619,8 +675,25 @@ ClassMethod GetDefaultBranch(path As %String) As %String
   Return branch
 }
 
-ClassMethod DownloadPackageFromGitHub(url As %String, Output branch As %String) As %String
+ClassMethod FindModuleXmlUnder(root As %String) As %String [ Private ]
 {
+  Set moduleFile = ##class(%File).NormalizeFilename("module.xml", root)
+  If ##class(%File).Exists(moduleFile) {
+    Return moduleFile
+  }
+  Set rs = ##class(%File).FileSetFunc(root, 1)
+  While rs.%Next() {
+    If rs.Type'="D" Continue
+    Set found = ..FindModuleXmlUnder(rs.Name)
+    If found '= "" Return found
+  }
+  Return ""
+}
+
+/// Download the upstream archive and locate module.xml for metadata only (archive bytes are kept as-is).
+ClassMethod DownloadPackageFromGitHub(url As %String, Output branch As %String, Output archivePath As %String, Output modulePath As %String, Output scratchDir As %String) As %Status
+{
+  Set archivePath = "", modulePath = "", scratchDir = ""
   Do ##class(%Net.URLParser).Parse(url, .tComponents)
   Set branch = ..GetDefaultBranch(tComponents("path"))
   Set ht = ##class(%Net.HttpRequest).%New()
@@ -633,21 +706,24 @@ ClassMethod DownloadPackageFromGitHub(url As %String, Output branch As %String) 
     Set ht.Port = port
   }
   Set ht.Location = tComponents("path")_"archive/"_branch_".tar.gz"
-  $$$ThrowOnError(ht.Get())
+  Set tSC = ht.Get()
+  If $$$ISERR(tSC) Return tSC
   If (ht.HttpResponse.StatusCode'=200) {
-    $$$ThrowStatus($$$ERROR(5001,"Unable to download repository "_url))
+    Return $$$ERROR($$$GeneralError, "Unable to download repository "_url)
   }
 
-  #dim response As %Net.HttpResponse
+  Set archivePath = ##class(%File).TempFilename("tgz")
   Set fs = ##class(%Stream.FileBinary).%New()
-  Set archiveFileName = ##class(%File).TempFilename("tgz")
-  Set fs.Filename = archiveFileName
+  Set fs.Filename = archivePath
   Do fs.CopyFromAndSave(ht.HttpResponse.Data)
 
-  Set outputFolder = $$$FileTempDir
-  Set res = $Zf(-100, "", "tar", "-zxvf", archiveFileName, "-C", outputFolder)
-
-  Return outputFolder
+  Set scratchDir = $$$FileTempDir
+  Set res = $Zf(-100, "", "tar", "-zxvf", archivePath, "-C", scratchDir)
+  Set modulePath = ..FindModuleXmlUnder(scratchDir)
+  If modulePath = "" {
+    Return $$$ERROR($$$GeneralError, "module.xml not found in downloaded repository archive")
+  }
+  Return $$$OK
 }
 
 ClassMethod GetModuleMeta(url As %String) As %DynamicObject
@@ -717,24 +793,25 @@ ClassMethod UpdatePackage(jo As %DynamicObject) As %Status
       If (..RepositoryExists(url, .id)) {
 	      $$$ThrowStatus($$$ERROR(5001, "This repository was published under a different name"))
       } Else {
-        Set sc = ..Publish(url, name)	
+        Set sc = ..Publish(url, name, channel)	
       }
     }
   } Catch ex {
     Set sc = ex.AsStatus() 
   }
-  If (outputFolder'="") {
-    Do ##class(%File).RemoveDirectoryTree(outputFolder)
-  }  
   Return sc
 }
 
 ClassMethod Publish(url As %String, name As %String, channel As %String) As %Status
 {
-  Set branch = "master"
-  Set outputFolder = ..DownloadPackageFromGitHub(url, .branch)
-  Set packageFolder = ##class(%File).NormalizeDirectory(name_"-"_branch, outputFolder)
-  Return ..LoadPackage(packageFolder, channel, url, 1)
+  Set archivePath = "", modulePath = "", scratchDir = ""
+  Set tSC = ..DownloadPackageFromGitHub(url, .branch, .archivePath, .modulePath, .scratchDir)
+  If $$$ISERR(tSC) Return tSC
+  Set tSC = ..LoadPackageFromArchive(archivePath, modulePath, channel, url, 1)
+  If scratchDir'="" {
+    Do ##class(%File).RemoveDirectoryTree(scratchDir)
+  }
+  Return tSC
 }
 
 ClassMethod LoadFromGitHub(Url = "", channel As %String = "")
@@ -745,17 +822,21 @@ ClassMethod LoadFromGitHub(Url = "", channel As %String = "")
   If $Extract(Url, *)'="/" { 
     Set Url = Url _ "/"
   }
-  Set name = ..GetPackageNameFromRepositoryURL(Url)
-  Set branch = "master"
-  Set outputFolder = ..DownloadPackageFromGitHub(Url, .branch)
-  Set packageFolder = ##class(%File).NormalizeDirectory(name_"-"_branch, outputFolder)
-  Set tSC = ..LoadPackage(packageFolder, channel, Url)
-  If $$$ISERR(tSC) { 
-    Do $System.OBJ.DisplayError() 
-  } Else { 
-    Write !,"Success" 
+  Set archivePath = "", modulePath = "", scratchDir = ""
+  Set tSC = ..DownloadPackageFromGitHub(Url, .branch, .archivePath, .modulePath, .scratchDir)
+  If $$$ISERR(tSC) {
+    Do $System.OBJ.DisplayError(tSC)
+  } Else {
+    Set tSC = ..LoadPackageFromArchive(archivePath, modulePath, channel, Url)
+    If $$$ISERR(tSC) {
+      Do $System.OBJ.DisplayError(tSC)
+    } Else {
+      Write !,"Success"
+    }
   }
-  Do ##class(%File).RemoveDirectoryTree(outputFolder)
+  If scratchDir'="" {
+    Do ##class(%File).RemoveDirectoryTree(scratchDir)
+  }
 }
 
 /// returns latest versions of packages
@@ -837,9 +918,10 @@ ClassMethod GetLatest(searchTerms As %DynamicArray = "", manifest As %String = "
     If (manifest = "1") {
       Set tPkgInfo.manifest = ""
       Set package = ##class(ZPM.Package).%OpenId(tResult.name_"||"_tResult.channel_"||"_tResult.version)
-      If ($IsObject(package.manifest)) {
-        While ('package.manifest.AtEnd) {
-          Set tPkgInfo.manifest = tPkgInfo.manifest _ package.manifest.Read(100)
+      Set manifestStream = package.GetManifestStream()
+      If ($IsObject(manifestStream)) {
+        While ('manifestStream.AtEnd) {
+          Set tPkgInfo.manifest = tPkgInfo.manifest _ manifestStream.Read(100)
         }
       }
     }
@@ -876,6 +958,180 @@ WHERE
 )
 GROUP BY name, channel
 ORDER BY name, channel
+}
+
+/// Dry-run report for versions whose archive bytes still live only in <code>^ZPM.PackageS</code>.
+/// Returns JSON: <code>{"onlyGlobal":n,"onDisk":n,"both":n,"onlyGlobalBytes":n,"rows":[...]}</code>.
+ClassMethod DiskMigrationReport(Output pStatus As %Status) As %String
+{
+  Set pStatus = $$$OK
+  Set out = {"onlyGlobal":0, "onDisk":0, "both":0, "onlyGlobalBytes":0, "rows":[]}
+  Set rs = ##class(%SQL.Statement).%ExecDirect(, "SELECT name, channel, version FROM ZPM.Package WHERE (deleted IS NULL OR deleted = 0) ORDER BY name, channel, version")
+  If rs.%SQLCODE < 0 {
+    Set pStatus = $$$ERROR($$$SQLError, rs.%SQLCODE, rs.%Message)
+    Return out.%ToJSON()
+  }
+  While rs.%Next() {
+    Set name = rs.name, ch = rs.channel, ver = rs.version
+    Set onDisk = ##class(ZPM.PackageStorage).DiskArchiveExists(name, ch, ver)
+    Set globalBytes = 0
+    Set p = ..NameChannelVersionOpen(name, ch, ver, , .tSC)
+    If $IsObject(p) && $IsObject(p.package) {
+      Do p.package.Rewind()
+      Set globalBytes = +p.package.Size
+    }
+    If onDisk && (globalBytes > 0) {
+      Set out.both = out.both + 1
+    } ElseIf onDisk {
+      Set out.onDisk = out.onDisk + 1
+    } ElseIf globalBytes > 0 {
+      Set out.onlyGlobal = out.onlyGlobal + 1
+      Set out.onlyGlobalBytes = out.onlyGlobalBytes + globalBytes
+      Do out.rows.%Push({"name":(name), "channel":(ch), "version":(ver), "bytes":(globalBytes)})
+    }
+    Kill p
+  }
+  Return out.%ToJSON()
+}
+
+/// Copy global package streams to disk for up to <var>maxVersions</var> rows (0 = no cap).
+/// <var>dryRun</var> defaults to 1. Verifies digest with <method>GetPackageHash</method> when <property>hash</property> is set.
+ClassMethod MigrateDiskVersions(dryRun As %Boolean = 1, maxVersions As %Integer = 0, pkg As %String = "", channel As %String = "", version As %String = "", Output pStatus As %Status) As %String
+{
+  Set pStatus = $$$OK
+  Set out = {"dryRun":(''dryRun), "migrated":0, "bytes":0, "remaining":0, "rows":[]}
+  Set sql = "SELECT name, channel, version, hash FROM ZPM.Package WHERE (deleted IS NULL OR deleted = 0)"
+  Set args = 0
+  If pkg'="" Set sql = sql_" AND name = ?", args = args + 1, args(args) = pkg
+  If channel'="" Set sql = sql_" AND channel = ?", args = args + 1, args(args) = channel
+  If version'="" Set sql = sql_" AND version = ?", args = args + 1, args(args) = version
+  Set sql = sql_" ORDER BY name, channel, versionMajor, versionMinor, versionPatch"
+  Set rs = ##class(%SQL.Statement).%ExecDirect(, sql, args...)
+  If rs.%SQLCODE < 0 {
+    Set pStatus = $$$ERROR($$$SQLError, rs.%SQLCODE, rs.%Message)
+    Return out.%ToJSON()
+  }
+  Set n = 0, total = 0, remaining = 0
+  While rs.%Next() {
+    If (maxVersions > 0) && (n >= maxVersions) {
+      Set remaining = remaining + 1
+      Continue
+    }
+    Set name = rs.name, ch = rs.channel, ver = rs.version, expectedHash = rs.hash
+    If ##class(ZPM.PackageStorage).DiskArchiveExists(name, ch, ver) Continue
+    Set p = ..NameChannelVersionOpen(name, ch, ver, , .tSC)
+    If '$IsObject(p) {
+      Set pStatus = $$$ADDSC(pStatus, tSC)
+      Continue
+    }
+    Set globalBytes = 0
+    If $IsObject(p.package) {
+      Do p.package.Rewind()
+      Set globalBytes = +p.package.Size
+    }
+    If globalBytes = 0 {
+      Kill p
+      Continue
+    }
+    If 'dryRun {
+      Set tSC = p.PersistStreamsToDisk()
+      If $$$ISERR(tSC) {
+        Set pStatus = $$$ADDSC(pStatus, tSC)
+        Kill p
+        Continue
+      }
+      Set diskStream = p.GetPackageStream()
+      If (expectedHash '= "") && ($IsObject(diskStream)) {
+        Set gotHash = ..GetPackageHash(diskStream)
+        If gotHash '= expectedHash {
+          Set pStatus = $$$ADDSC(pStatus, $$$ERROR($$$GeneralError, "hash mismatch after migrate for "_name_"@"_ver))
+          Kill p
+          Continue
+        }
+      }
+      Set tSC = p.%Save()
+      If $$$ISERR(tSC) {
+        Set pStatus = $$$ADDSC(pStatus, tSC)
+        Kill p
+        Continue
+      }
+    }
+    Set n = n + 1, total = total + globalBytes
+    Do out.rows.%Push({"name":(name), "channel":(ch), "version":(ver), "bytes":(globalBytes)})
+    Kill p
+  }
+  Set out.migrated = n, out.bytes = total, out.remaining = remaining
+  Return out.%ToJSON()
+}
+
+/// After migrate, drop redundant <code>^ZPM.PackageS</code> chunks for rows that already have a verified on-disk archive.
+/// <var>dryRun</var> defaults to 1.
+ClassMethod ClearMigratedPackageGlobals(dryRun As %Boolean = 1, maxVersions As %Integer = 0, pkg As %String = "", channel As %String = "", version As %String = "", Output pStatus As %Status) As %String
+{
+  Set pStatus = $$$OK
+  Set out = {"dryRun":(''dryRun), "cleared":0, "bytes":0, "remaining":0, "rows":[]}
+  Set sql = "SELECT name, channel, version, hash FROM ZPM.Package WHERE (deleted IS NULL OR deleted = 0)"
+  Set args = 0
+  If pkg'="" Set sql = sql_" AND name = ?", args = args + 1, args(args) = pkg
+  If channel'="" Set sql = sql_" AND channel = ?", args = args + 1, args(args) = channel
+  If version'="" Set sql = sql_" AND version = ?", args = args + 1, args(args) = version
+  Set sql = sql_" ORDER BY name, channel, versionMajor, versionMinor, versionPatch"
+  Set rs = ##class(%SQL.Statement).%ExecDirect(, sql, args...)
+  If rs.%SQLCODE < 0 {
+    Set pStatus = $$$ERROR($$$SQLError, rs.%SQLCODE, rs.%Message)
+    Return out.%ToJSON()
+  }
+  Set n = 0, total = 0, remaining = 0
+  While rs.%Next() {
+    If (maxVersions > 0) && (n >= maxVersions) {
+      Set remaining = remaining + 1
+      Continue
+    }
+    Set name = rs.name, ch = rs.channel, ver = rs.version, expectedHash = rs.hash
+    If '##class(ZPM.PackageStorage).DiskArchiveExists(name, ch, ver) Continue
+    Set p = ..NameChannelVersionOpen(name, ch, ver, , .tSC)
+    If '$IsObject(p) Continue
+    Set globalBytes = 0
+    If $IsObject(p.package) {
+      Do p.package.Rewind()
+      Set globalBytes = +p.package.Size
+    }
+    If globalBytes = 0 {
+      Kill p
+      Continue
+    }
+    Set diskStream = ##class(ZPM.PackageStorage).OpenDiskArchive(name, ch, ver)
+    If '$IsObject(diskStream) {
+      Kill p
+      Continue
+    }
+    If (expectedHash '= "") && (..GetPackageHash(diskStream) '= expectedHash) {
+      Kill p
+      Continue
+    }
+    If 'dryRun {
+      Set path = ##class(ZPM.PackageStorage).ArchivePath(name, ch, ver)
+      Set fb = ##class(%Stream.FileBinary).%New()
+      Set tSC = fb.LinkToFile(path)
+      If $$$ISERR(tSC) {
+        Set pStatus = $$$ADDSC(pStatus, tSC)
+        Kill p
+        Continue
+      }
+      Set p.package = fb
+      Set tSC = p.%Save()
+      If $$$ISERR(tSC) {
+        Set pStatus = $$$ADDSC(pStatus, tSC)
+        Kill p
+        Continue
+      }
+    }
+    Set n = n + 1, total = total + globalBytes
+    Do out.rows.%Push({"name":(name), "channel":(ch), "version":(ver), "bytes":(globalBytes)})
+    Kill p
+  }
+  Set out.cleared = n, out.bytes = total, out.remaining = remaining
+  Return out.%ToJSON()
 }
 
 /// Hard purge: physically remove rows ALREADY soft-deleted (<code>deleted = 1</code>) by
@@ -923,11 +1179,18 @@ ClassMethod PurgeDeleted(dryRun As %Boolean = 1, maxVersions As %Integer = 0, pk
     // re-check under the open: never purge a row that was revived since the SELECT
     If p.deleted '= 1 Continue
     Set bytes = 0
+    Set diskBytes = ##class(ZPM.PackageStorage).DiskArchiveSize(name, ch, ver)
     Set:$IsObject(p.package) bytes = bytes + p.package.Size
     Set:$IsObject(p.manifest) bytes = bytes + p.manifest.Size
     Set:$IsObject(p.installer) bytes = bytes + p.installer.Size
+    Set bytes = bytes + diskBytes
     Kill p
     If 'dryRun {
+      Set tSC = ##class(ZPM.PackageStorage).DeleteVersionDirectory(name, ch, ver)
+      If $$$ISERR(tSC) {
+        Set pStatus = $$$ADDSC(pStatus, tSC)
+        Continue
+      }
       // %DeleteId removes the data node, the dependencies subnode, the index entries and
       // every stream property's ^ZPM.PackageS chunks.
       Set tSC = ..NameChannelVersionDelete(name, ch, ver)

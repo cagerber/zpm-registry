@@ -21,6 +21,9 @@ Class ZPM.Settings Extends %RegisteredObject
 
 Parameter Filename = "zpm-registry.yaml";
 
+/// Default on-disk store for package archives (Windows staging host). Not under mgr/ or the REGISTRY database directory.
+Parameter DEFAULTPACKAGEFILESROOT = "C:\InterSystems\IRISHealth\stream-files\zpm-registry\";
+
 Property Exists As %Boolean;
 
 Property DateModified As %String;
@@ -141,6 +144,42 @@ Method GetDeleteEnable() As %Boolean
         Set sc = ex.AsStatus()
     }
     Return 0
+}
+
+/// Root directory for zpm-registry package files ({root}/packages/...). Override via zpm-registry.yaml
+/// <code>package-files-root</code> (namespace block or top-level), same pattern as delete-enabled.
+ClassMethod GetPackageFilesRoot() As %String
+{
+    Set ns = $$$lcase($NAMESPACE)
+    Set settings = ..%New()
+    If ($Data(^zpmregistry(ns,"package-files-root")) && 'settings.IsModified()) {
+        Return ##class(ZPM.PackageStorage).NormalizeDir($Get(^zpmregistry(ns,"package-files-root")))
+    }
+    Set root = ""
+    If settings.Exists {
+        Try {
+            Set obj = settings.JSON
+            Set iter = obj.%GetIterator()
+            While iter.%GetNext(.key , .fns) {
+                If (ns = $$$lcase(key)) && (fns.%IsDefined("package-files-root")) {
+                    Set root = fns."package-files-root"
+                    Quit
+                }
+            }
+            If root = "" && obj.%IsDefined("package-files-root") {
+                Set root = obj."package-files-root"
+            }
+        } Catch ex {
+            Do ex.Log()
+        }
+    }
+    Set root = $ZStrip(root, "<>W")
+    If root '= "" {
+        Set ^zpmregistry(ns,"package-files-root") = root
+        Return ##class(ZPM.PackageStorage).NormalizeDir(root)
+    }
+    Set ^zpmregistry(ns,"package-files-root") = ..#DEFAULTPACKAGEFILESROOT
+    Return ##class(ZPM.PackageStorage).NormalizeDir(..#DEFAULTPACKAGEFILESROOT)
 }
 
 }

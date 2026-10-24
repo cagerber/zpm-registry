@@ -72,6 +72,36 @@ delete-enabled: true
 
 
 
+## On-disk package files (trifour fork)
+
+Package archives (and sidecar `module.xml` / installer files) are stored on the host filesystem, not
+only in `^ZPM.PackageS`. Legacy rows still dual-read from globals until migrated.
+
+**Default root (Windows staging):** `C:\InterSystems\IRISHealth\stream-files\zpm-registry\`  
+Layout: `packages\<name>\<channel>\<version>\package.tgz` (plus `module.xml`, `installer.xml` when present).  
+Do not place files under `mgr\` or the REGISTRY database directory (`mgr\registry\`).
+
+Override per namespace in `zpm-registry.yaml`:
+
+```
+package-files-root: /your/path/zpm-registry
+```
+
+**Byte-preserving ingest:** REST `PublishPackage`, `LoadPackageFromArchive`, and admin archive upload store
+the **exact** `.tgz` bytes the client supplied. The registry does not unpack and re-tar for ingest.
+`package.hash` is SHA1 of those stored bytes.
+
+**Migration (dry-run first — do not run against production/staging until approved):**
+
+```
+write ##class(ZPM.Package).DiskMigrationReport(.sc)
+write ##class(ZPM.Package).MigrateDiskVersions(1, 50, , , , .sc)
+write ##class(ZPM.Package).MigrateDiskVersions(0, 50, , , , .sc)
+write ##class(ZPM.Package).ClearMigratedPackageGlobals(1, 50, , , , .sc)
+```
+
+After clearing globals, compact/truncate the database to reclaim space.
+
 ## Hard purge of soft-deleted versions (trifour 1.3.12)
 
 `DeletePackageVersion` only sets `deleted = 1`. The tgz, manifest and installer streams stay in
