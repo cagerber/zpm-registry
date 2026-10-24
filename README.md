@@ -74,8 +74,10 @@ delete-enabled: true
 
 ## On-disk package files (trifour fork)
 
-Package archives (and sidecar `module.xml` / installer files) are stored on the host filesystem, not
-only in `^ZPM.PackageS`. Legacy rows still dual-read from globals until migrated.
+Package archives (and sidecar `module.xml` / installer files) are stored on the host filesystem. The
+`package`, `manifest` and `installer` properties are file streams, so nothing is written to `^ZPM.PackageS`.
+Legacy rows are moved with `ZPM.StreamMigration` (`Copy`, then `Repoint`, then `Check`; all resumable,
+per-row log in `<package-files-root>/migrate-streams.log`).
 
 **Default root:** `<InstallDir>/stream-files/zpm-registry/`, derived from `$SYSTEM.Util.InstallDirectory()` (on staging that is `C:\InterSystems\IRISHealth\stream-files\zpm-registry\`)  
 Layout: `packages\<name>\<channel>\<version>\package.tgz` (plus `module.xml`, `installer.xml` when present).  

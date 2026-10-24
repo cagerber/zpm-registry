@@ -42,13 +42,14 @@ Index Repository On repository;
 
 Property dependencies As array Of %String;
 
-Property package As %Stream.Object(%JSONINCLUDE = "NONE");
+/// Archive bytes live only in a host file (see ZPM.PackageStorage); never in ^ZPM.PackageS.
+Property package As %Stream.FileBinary(%JSONINCLUDE = "NONE");
 
 Property size As %Integer(%JSONINCLUDE = "OUTPUTONLY");
 
-Property manifest As %Stream.GlobalCharacter(%JSONINCLUDE = "INPUTONLY");
+Property manifest As %Stream.FileCharacter(%JSONINCLUDE = "INPUTONLY");
 
-Property installer As %Stream.GlobalCharacter(%JSONINCLUDE = "INPUTONLY");
+Property installer As %Stream.FileCharacter(%JSONINCLUDE = "INPUTONLY");
 
 Property hash As %String(%JSONINCLUDE = "OUTPUTONLY") [ SqlComputeCode = { Set {*} = ..GetPackageHash({package})}, SqlComputed, SqlComputeOnChange = %%UPDATE ];
 
@@ -192,9 +193,11 @@ Method InstallStreamPropertyToFile(stream As %Stream.Object, destPath As %String
     If (src = destPath) && ##class(%File).Exists(destPath) {
       Return $$$OK
     }
-    If ##class(%File).Exists(src) {
-      Return ##class(ZPM.PackageStorage).InstallFileFromPath(src, destPath, .errMsg)
-    }
+  }
+  If stream.%IsA("%Stream.FileCharacter") || stream.%IsA("%Stream.GlobalCharacter") || stream.%IsA("%Stream.TmpCharacter") {
+    // Text sidecars are stored as UTF-8 so OpenDiskCharacter reads back the same characters,
+    // whatever translate table the incoming temp stream used.
+    Return ##class(ZPM.PackageStorage).CopyStreamToCharacterFile(stream, destPath, "UTF8", .errMsg)
   }
   Set bytes = 0
   Return ##class(ZPM.PackageStorage).CopyStreamToFile(stream, destPath, .bytes, .errMsg)
@@ -240,6 +243,8 @@ Method packageFromBase64(base64 As %Stream.DynamicBinary) As %Status
     Do ##class(%File).Delete(tmpPath)
     Return sc
   }
+  // Close the handle first: Windows refuses to rename an open file.
+  Kill out
   If ##class(%File).Exists(path) {
     Do ##class(%File).Delete(path)
   }

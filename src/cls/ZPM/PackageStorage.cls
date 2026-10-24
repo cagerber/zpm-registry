@@ -189,6 +189,8 @@ ClassMethod CopyStreamToFile(source As %Stream.Object, destPath As %String, Outp
         Return sc
     }
     Set bytesWritten = +fileStream.Size
+    // Close the handle first: Windows refuses to rename an open file.
+    Kill fileStream
     If ##class(%File).Exists(destPath) {
         Do ##class(%File).Delete(destPath)
     }
@@ -227,6 +229,8 @@ ClassMethod CopyStreamToCharacterFile(source As %Stream.Object, destPath As %Str
         Set errMsg = $System.Status.GetErrorText(sc)
         Return sc
     }
+    // Close the handle first: Windows refuses to rename an open file.
+    Kill fileStream
     If ##class(%File).Exists(destPath) Do ##class(%File).Delete(destPath)
     If '##class(%File).Rename(tmpPath, destPath) {
         Do ##class(%File).Delete(tmpPath)
