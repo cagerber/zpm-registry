@@ -92,8 +92,12 @@ Method nameSet(value As %String) As %Status
 Method sizeGet() As %Integer
 {
   Set stream = ..GetPackageStream()
-  Return:'$IsObject(stream) ""
-  Return:'stream.Size ""
+  If '$IsObject(stream) {
+    Return ""
+  }
+  If 'stream.Size {
+    Return ""
+  }
   Return stream.Size
 }
 
@@ -641,8 +645,8 @@ ClassMethod LoadPackageFromArchive(archivePath As %String, manifestPath As %Stri
   Set package.repository = repository
   Set package.version = version
   Set archive = ##class(%Stream.FileBinary).%New()
-  Set sc = archive.LinkToFile(archiveDest)
-  If $$$ISERR(sc) Return sc
+  Set tSC = archive.LinkToFile(archiveDest)
+  If $$$ISERR(tSC) Return tSC
   Set package.package = archive
   Set module = ##class(ZPM.PackageStorage).OpenDiskCharacter(manifestDest)
   If '$IsObject(module) Return $$$ERROR($$$GeneralError, "unable to open manifest on disk")

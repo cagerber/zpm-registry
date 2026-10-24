@@ -20,13 +20,19 @@ ClassMethod NormalizeDir(path As %String) As %String
 ClassMethod SafeSegment(value As %String) As %String
 {
     Set value = $ZStrip($Get(value), "<>W")
-    If value = "" Return "_"
+    If value = "" {
+        Return "_"
+    }
     Set out = ""
     For i = 1:1:$Length(value) {
         Set ch = $Extract(value, i)
-        If ch?1AN Set out = out _ ch
-        ElseIf (ch = "-") || (ch = "_") || (ch = ".") Set out = out _ ch
-        Else Set out = out _ "_"
+        If ch?1AN {
+            Set out = out _ ch
+        } ElseIf (ch = "-") || (ch = "_") || (ch = ".") {
+            Set out = out _ ch
+        } Else {
+            Set out = out _ "_"
+        }
     }
     Return out
 }
@@ -104,13 +110,13 @@ ClassMethod DiskArchiveSize(name As %String, channel As %String, version As %Str
 {
     Set path = ..ArchivePath(name, channel, version)
     If '##class(%File).Exists(path) Return 0
-    Return +##class(%File).GetSize(path)
+    Return +##class(%File).GetFileSize(path)
 }
 
 ClassMethod DiskArchiveExists(name As %String, channel As %String, version As %String) As %Boolean
 {
     Set path = ..ArchivePath(name, channel, version)
-    Return ##class(%File).Exists(path) && (##class(%File).GetSize(path) > 0)
+    Return ##class(%File).Exists(path) && (##class(%File).GetFileSize(path) > 0)
 }
 
 ClassMethod OpenDiskArchive(name As %String, channel As %String, version As %String) As %Stream.FileBinary
