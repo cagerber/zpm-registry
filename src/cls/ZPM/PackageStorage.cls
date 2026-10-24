@@ -76,6 +76,9 @@ ClassMethod PathUnderRoot(fullPath As %String, root As %String) As %Boolean
     If $Length(fullPath) < $Length(root) Return 0
     If $Extract(fullPath, 1, $Length(root)) '= root Return 0
     If $Length(fullPath) = $Length(root) Return 1
+    // NormalizeDirectory leaves a trailing separator on root, so the prefix match already ends at a boundary
+    Set last = $Extract(root, *)
+    If (last = "/") || (last = "\") Return 1
     Set sep = $Extract(fullPath, $Length(root) + 1, $Length(root) + 1)
     Return (sep = "/") || (sep = "\")
 }
