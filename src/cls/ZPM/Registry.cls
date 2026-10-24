@@ -173,8 +173,11 @@ ClassMethod PackageManifest(pkg As %String = "", version As %String = "", platfo
     Set package = ##class(ZPM.Package).NameChannelVersionOpen(pkg, channel, version)
   }
 
+  If ('$IsObject(package))||(package.deleted=1) {
+    Return ..ReportHttpStatusCode(..#HTTP404NOTFOUND)
+  }
   Set manifestStream = package.GetManifestStream()
-  If ('$IsObject(package))||('$IsObject(manifestStream))||('manifestStream.Size)||(package.deleted=1) {
+  If ('$IsObject(manifestStream))||('manifestStream.Size) {
     Return ..ReportHttpStatusCode(..#HTTP404NOTFOUND)
   }
 
