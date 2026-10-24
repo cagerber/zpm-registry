@@ -156,24 +156,20 @@ Method PersistStreamsToDisk() As %Status
     Set path = ##class(ZPM.PackageStorage).ArchivePath(..name, ..channel, ..version)
     Set sc = ..InstallStreamPropertyToFile(..package, path, .errMsg)
     If $$$ISERR(sc) Return sc
-    Set fb = ##class(%Stream.FileBinary).%New()
-    Set sc = fb.LinkToFile(path)
-    If $$$ISERR(sc) Return sc
-    Set ..package = fb
+    // Store a reference to the file (SetObjectId); assigning a stream object would copy it.
+    Do ..packageSetObjectId(path)
   }
   If $IsObject(..manifest) && ..manifest.Size {
     Set path = ##class(ZPM.PackageStorage).ManifestPath(..name, ..channel, ..version)
     Set sc = ..InstallStreamPropertyToFile(..manifest, path, .errMsg)
     If $$$ISERR(sc) Return sc
-    Set fc = ##class(ZPM.PackageStorage).OpenDiskCharacter(path)
-    If $IsObject(fc) Set ..manifest = fc
+    Do ..manifestSetObjectId(path)
   }
   If $IsObject(..installer) && ..installer.Size {
     Set path = ##class(ZPM.PackageStorage).InstallerPath(..name, ..channel, ..version)
     Set sc = ..InstallStreamPropertyToFile(..installer, path, .errMsg)
     If $$$ISERR(sc) Return sc
-    Set fc = ##class(ZPM.PackageStorage).OpenDiskCharacter(path)
-    If $IsObject(fc) Set ..installer = fc
+    Do ..installerSetObjectId(path)
   }
   Return $$$OK
 }
@@ -256,10 +252,7 @@ Method packageFromBase64(base64 As %Stream.DynamicBinary) As %Status
     Do ##class(%File).Delete(tmpPath)
     Return $$$ERROR($$$GeneralError, "unable to finalize package archive")
   }
-  Set fb = ##class(%Stream.FileBinary).%New()
-  Set sc = fb.LinkToFile(path)
-  If $$$ISERR(sc) Return sc
-  Set ..package = fb
+  Do ..packageSetObjectId(path)
   Set ..hash = $$$lcase(##class(%File).SHA1Hash(path, 1))
   Return $$$OK
 }
@@ -647,10 +640,10 @@ ClassMethod LoadPackageFromArchive(archivePath As %String, manifestPath As %Stri
   Set archive = ##class(%Stream.FileBinary).%New()
   Set tSC = archive.LinkToFile(archiveDest)
   If $$$ISERR(tSC) Return tSC
-  Set package.package = archive
+  Do package.packageSetObjectId(archiveDest)
   Set module = ##class(ZPM.PackageStorage).OpenDiskCharacter(manifestDest)
   If '$IsObject(module) Return $$$ERROR($$$GeneralError, "unable to open manifest on disk")
-  Set package.manifest = module
+  Do package.manifestSetObjectId(manifestDest)
   Set hash = $$$lcase(##class(%File).SHA1Hash(archiveDest, 1))
   Set package.hash = hash
   If ('silent) {
@@ -1120,14 +1113,7 @@ ClassMethod ClearMigratedPackageGlobals(dryRun As %Boolean = 1, maxVersions As %
     }
     If 'dryRun {
       Set path = ##class(ZPM.PackageStorage).ArchivePath(name, ch, ver)
-      Set fb = ##class(%Stream.FileBinary).%New()
-      Set tSC = fb.LinkToFile(path)
-      If $$$ISERR(tSC) {
-        Set pStatus = $$$ADDSC(pStatus, tSC)
-        Kill p
-        Continue
-      }
-      Set p.package = fb
+      Do p.packageSetObjectId(path)
       Set tSC = p.%Save()
       If $$$ISERR(tSC) {
         Set pStatus = $$$ADDSC(pStatus, tSC)

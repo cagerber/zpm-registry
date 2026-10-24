@@ -187,17 +187,12 @@ ClassMethod Repoint(dryRun As %Boolean = 1, batch As %Integer = 0, Output report
                 Set propName = $ListGet(slots(slot), 1)
                 Set path = ##class(%File).NormalizeFilename($ListGet(slots(slot), 2), ##class(ZPM.PackageStorage).VersionDirectory(name, ch, ver))
                 If ##class(%File).Exists(path) {
-                    If propName = "package" {
-                        Set fs = ##class(%Stream.FileBinary).%New()
-                        $$$ThrowOnError(fs.LinkToFile(path))
-                    } Else {
-                        Set fs = ##class(ZPM.PackageStorage).OpenDiskCharacter(path)
-                    }
-                    Set $Property(p, propName) = fs
+                    // Reference the file itself; assigning a stream object would copy it.
+                    $$$ThrowOnError($Method(p, propName _ "SetObjectId", path))
                 } ElseIf ..GlobalBytes($ListGet(d, slot), $ListGet(slots(slot), 3)) > 0 {
                     $$$ThrowStatus($$$ERROR($$$GeneralError, propName_" still only in ^ZPM.PackageS; run Copy first"))
                 } Else {
-                    Set $Property(p, propName) = ""
+                    $$$ThrowOnError($Method(p, propName _ "SetObjectId", ""))
                 }
             }
             $$$ThrowOnError(p.%Save())
