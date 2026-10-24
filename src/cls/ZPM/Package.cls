@@ -521,7 +521,7 @@ Method UpdateDescriptionFromManifest() As %Status
 {
   Try {
     Set manifestStream = ..GetManifestStream()
-    Quit:'$IsObject(manifestStream) manifestStream.Size
+    Return:'$IsObject(manifestStream) $$$OK
     $$$ThrowOnError(##class(%XML.XPATH.Document).CreateFromStream(manifestStream, .tDocument))
     $$$ThrowOnError(tDocument.EvaluateExpression("/Module/Description", "text()", .tRes))
     If (tRes.Count()>0) {
