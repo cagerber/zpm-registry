@@ -77,7 +77,7 @@ delete-enabled: true
 Package archives (and sidecar `module.xml` / installer files) are stored on the host filesystem, not
 only in `^ZPM.PackageS`. Legacy rows still dual-read from globals until migrated.
 
-**Default root (Windows staging):** `C:\InterSystems\IRISHealth\stream-files\zpm-registry\`  
+**Default root:** `<InstallDir>/stream-files/zpm-registry/`, derived from `$SYSTEM.Util.InstallDirectory()` (on staging that is `C:\InterSystems\IRISHealth\stream-files\zpm-registry\`)  
 Layout: `packages\<name>\<channel>\<version>\package.tgz` (plus `module.xml`, `installer.xml` when present).  
 Do not place files under `mgr\` or the REGISTRY database directory (`mgr\registry\`).
 

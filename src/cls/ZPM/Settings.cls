@@ -21,8 +21,13 @@ Class ZPM.Settings Extends %RegisteredObject
 
 Parameter Filename = "zpm-registry.yaml";
 
-/// Default on-disk store for package archives (Windows staging host). Not under mgr/ or the REGISTRY database directory.
-Parameter DEFAULTPACKAGEFILESROOT = "C:\InterSystems\IRISHealth\stream-files\zpm-registry\";
+/// Default on-disk store for package archives: <code>&lt;InstallDir&gt;/stream-files/zpm-registry/</code>.
+/// Derived from the running instance, never hardcoded; not under mgr/ or the REGISTRY database directory.
+ClassMethod DefaultPackageFilesRoot() As %String
+{
+    Set dir = ##class(%File).SubDirectoryName(##class(%SYSTEM.Util).InstallDirectory(), "stream-files", 1)
+    Return ##class(%File).SubDirectoryName(dir, "zpm-registry", 1)
+}
 
 Property Exists As %Boolean;
 
@@ -178,8 +183,9 @@ ClassMethod GetPackageFilesRoot() As %String
         Set ^zpmregistry(ns,"package-files-root") = root
         Return ##class(ZPM.PackageStorage).NormalizeDir(root)
     }
-    Set ^zpmregistry(ns,"package-files-root") = ..#DEFAULTPACKAGEFILESROOT
-    Return ##class(ZPM.PackageStorage).NormalizeDir(..#DEFAULTPACKAGEFILESROOT)
+    // Not cached: the default follows the instance's install directory.
+    Kill ^zpmregistry(ns,"package-files-root")
+    Return ##class(ZPM.PackageStorage).NormalizeDir(..DefaultPackageFilesRoot())
 }
 
 }
