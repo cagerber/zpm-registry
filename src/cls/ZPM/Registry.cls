@@ -2,7 +2,7 @@
 Class ZPM.Registry Extends ZPM.REST.Base
 {
 
-Parameter VERSION = "1.3.13";
+Parameter VERSION = "1.3.19";
 
 XData UrlMap [ XMLNamespace = "http://www.intersystems.com/urlmap" ]
 {
