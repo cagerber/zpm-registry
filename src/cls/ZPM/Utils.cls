@@ -58,7 +58,7 @@ ClassMethod NormalizeKeywordsScalar(pModuleFile As %String, pKeywords As %String
   Set tSC = tStream.Rewind()
   If $$$ISERR(tSC) Return tSC
   Set tText = tStream.Read(1000000)
-  Do tStream.Close()
+  Do tStream.%Close()
 
   // Find the <Keywords>…</Keywords> block (list form has <Keyword> children,
   // scalar form has inline text). Replace whichever form is present with a
@@ -75,7 +75,7 @@ ClassMethod NormalizeKeywordsScalar(pModuleFile As %String, pKeywords As %String
     If $$$ISERR(tSC) Return tSC
     Set tSC = tOut.%Save()
     If $$$ISERR(tSC) Return tSC
-    Do tOut.Close()
+    Do tOut.%Close()
   }
   Return $$$OK
 }
