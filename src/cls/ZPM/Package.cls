@@ -609,10 +609,16 @@ ClassMethod LoadPackageFromArchive(archivePath As %String, manifestPath As %Stri
     If $$$ISERR(tSC) Return tSC
     If $IsObject(tRes.GetAt(1)) Set keywords = tRes.GetAt(1).Value
   }
-
   If (channel = "") {
     Return $$$ERROR($$$GeneralError, "channel is required: one registry hosts every channel")
   }
+  // Trifour fork (9-373): rewrite the on-disk module.xml <Keywords> to the
+  // scalar form the zpm 0.10.9 client accepts. The <Keyword> list form makes
+  // %XML.Reader.Correlate fail (#6232) because %IPM.Storage.Module.Keywords is
+  // a scalar %String. Normalize after validation and before the manifest is
+  // captured, so a rejected request leaves the file untouched.
+  Set tSC = ##class(ZPM.Utils).NormalizeKeywordsScalar(manifestPath, keywords)
+  If $$$ISERR(tSC) Return tSC
   Do ..DeleteExistingPackages(name,version,channel)
   Set errMsg = ""
   If '##class(ZPM.PackageStorage).EnsureVersionDirectory(name, channel, version, .errMsg) {

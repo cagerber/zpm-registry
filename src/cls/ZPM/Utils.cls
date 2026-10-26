@@ -14,8 +14,18 @@ ClassMethod ServerURL() As %String
   Set proto = %request.GetCgiEnv("HTTP_X_FORWARDED_PROTO", $SELECT(tSecure: "https", 1: "http"))
   Set port = %request.GetCgiEnv("HTTP_X_FORWARDED_PORT", %request.GetCgiEnv("SERVER_PORT"))
   Set host = proto _ "://" _ host
-  If '$LISTFIND($LISTBUILD(80, 443), port) {
-    Set host = host_":"_port
+  // Always emit the explicit port. %Net.URLParser.Parse defaults a missing
+  // port to 0 (it does not imply http->80), so the IPM client on a localhost
+  // HTTP path would otherwise download from "localhost:0" and 503.
+  Set port = $ZStrip(port, "<>W")
+  If port = "" {
+    Set port = $Select(proto = "https": 443, 1: 80)
+  }
+  // A proxy sometimes puts the port in X-Forwarded-Host; append only when absent.
+  Set tPortMatcher = ##class(%Regex.Matcher).%New(":[0-9]+$")
+  Set tPortMatcher.Text = host
+  If 'tPortMatcher.Locate() {
+    Set host = host _ ":" _ port
   }
   If (%request.GetCgiEnv("HTTP_X_ORIGINAL_URI")'="") {
     Set path = $REPLACE(%request.URL, %request.Application,"",1,1)
@@ -28,6 +38,46 @@ ClassMethod ServerURL() As %String
     }
   }
   Return host
+}
+
+/// Trifour fork (9-373): rewrite the on-disk module.xml <Keywords> element to
+/// the scalar comma-separated form the zpm 0.10.9 client accepts. The list
+/// form (<Keywords><Keyword>a</Keyword>…</Keywords>) makes the client's
+/// %XML.Reader.Correlate fail with #6232 ("Datatype validation failed for tag,
+/// Keywords") because %IPM.Storage.Module.Keywords is a scalar %String.
+/// Idempotent: already-scalar or absent <Keywords> is left as-is.
+ClassMethod NormalizeKeywordsScalar(pModuleFile As %String, pKeywords As %String) As %Status
+{
+  Set tFile = $Get(pModuleFile)
+  If (tFile = "") Return $$$OK
+  If '##class(%File).Exists(tFile) Return $$$OK
+
+  Set tStream = ##class(%Stream.FileCharacter).%New()
+  Set tStream.TranslateTable = "UTF8"
+  Set tStream.Filename = tFile
+  Set tSC = tStream.Rewind()
+  If $$$ISERR(tSC) Return tSC
+  Set tText = tStream.Read(1000000)
+  Do tStream.Close()
+
+  // Find the <Keywords>…</Keywords> block (list form has <Keyword> children,
+  // scalar form has inline text). Replace whichever form is present with a
+  // single scalar <Keywords>…</Keywords> using the already-extracted keywords.
+  Set tRegex = ##class(%Regex.Matcher).%New("<Keywords>[\s\S]*?</Keywords>")
+  Set tRegex.Text = tText
+  Set tReplacement = "<Keywords>" _ $ZConvert($Get(pKeywords), "O", "HTML") _ "</Keywords>"
+  Set tNew = tRegex.ReplaceAll(tReplacement)
+  If (tNew '= tText) {
+    Set tOut = ##class(%Stream.FileCharacter).%New()
+    Set tOut.TranslateTable = "UTF8"
+    Set tOut.Filename = tFile
+    Set tSC = tOut.Write(tNew)
+    If $$$ISERR(tSC) Return tSC
+    Set tSC = tOut.%Save()
+    If $$$ISERR(tSC) Return tSC
+    Do tOut.Close()
+  }
+  Return $$$OK
 }
 
 /// Reads from pStream
