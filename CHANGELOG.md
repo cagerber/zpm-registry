@@ -8,6 +8,15 @@ the repo-root `VERSION`; a bump carries its entry.
 
 Entries begin at 1.3.19 — earlier history predates this file.
 
+## [1.3.21] - 2026-11-05
+
+### Fixed
+
+- **`Registry.cls` carries the root VERSION again.** 1.3.20 was bumped at the repo root but the
+  class still declared 1.3.19, so the coordinator refused to pack both channels ("refusing to pack
+  as 1.3.20 — the class declares 1.3.19"). The class now declares 1.3.21 with this bump; the
+  package content is otherwise unchanged.
+
 ## [1.3.20] - 2026-11-03
 
 ### Changed
