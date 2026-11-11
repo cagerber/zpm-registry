@@ -108,6 +108,16 @@ Method TestPurgeCompletesAnEarlierSoftDelete()
     Do $$$AssertEquals(tReport.purged, 1, "purged now")
 }
 
+Method TestLatestIgnoresSoftDeletedHighestVersion()
+{
+    Do ..Cleanup()
+    Do $$$AssertStatusOK(..Make(..#CHANNEL, "1.0.9000"))
+    Do $$$AssertStatusOK(..Make(..#CHANNEL, "1.0.1428"))
+    Do $$$AssertEquals(##class(ZPM.Package).VersionFind(..#NAME, "latest", 1, 1, ..#CHANNEL), "1.0.9000", "highest live version before delete")
+    Do ##class(ZPM.Package).RemoveVersion(..#NAME, "1.0.9000", ..#CHANNEL, 0, 0, .tSC)
+    Do $$$AssertEquals(##class(ZPM.Package).VersionFind(..#NAME, "latest", 1, 1, ..#CHANNEL), "1.0.1428", "latest skips the soft-deleted row")
+}
+
 Method TestUnknownVersionIsNotFound()
 {
     Do ..Cleanup()

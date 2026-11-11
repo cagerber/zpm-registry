@@ -10,6 +10,11 @@ Entries begin at 1.3.19 — earlier history predates this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- `latest` resolution (`VersionFind`, `versionValidate`) ignores soft-deleted rows, so soft-deleting the
+  highest version no longer makes the package unresolvable (404) instead of falling back to the next one.
+
 ## [1.3.23] - 2026-11-11
 
 ### Fixed
