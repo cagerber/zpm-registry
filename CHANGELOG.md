@@ -10,6 +10,8 @@ Entries begin at 1.3.19 — earlier history predates this file.
 
 ## [Unreleased]
 
+## [1.3.22] - 2026-11-11
+
 ### Added
 
 - **`GET /admin/packages`**: read-only list of direct-published versions (`name`, `channel`,
