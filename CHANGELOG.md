@@ -10,6 +10,8 @@ Entries begin at 1.3.19 — earlier history predates this file.
 
 ## [Unreleased]
 
+## [1.3.24] - 2026-11-11
+
 ### Fixed
 
 - `latest` resolution (`VersionFind`, `versionValidate`) ignores soft-deleted rows, so soft-deleting the
