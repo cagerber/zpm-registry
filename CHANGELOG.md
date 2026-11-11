@@ -8,6 +8,23 @@ the repo-root `VERSION`; a bump carries its entry.
 
 Entries begin at 1.3.19 — earlier history predates this file.
 
+## [Unreleased]
+
+### Added
+
+- **`GET /admin/packages`**: read-only list of direct-published versions (`name`, `channel`,
+  `include_deleted=1` filters; token-authed). Uplink/proxy rows are never listed.
+- **`ZPM.Package.RemoveVersion(pkg, version, channel, purge, dryRun)`**: remove ONE version in ONE
+  channel, soft (flag `deleted = 1`) or hard (`purge=1`, the bytes leave the registry), dry-run by
+  default, and able to purge an earlier soft delete.
+
+### Fixed
+
+- **`DELETE /admin/packages/:pkg/:version` works on a channel-scoped registry.** It opened the row
+  and called `DeletePackageVersion` without a channel, so it could not find or delete anything in
+  `incubating` or `sprint`. It now requires `?channel=`, accepts `purge=1` and `dry_run=1`, and
+  returns the removal report.
+
 ## [1.3.21] - 2026-11-05
 
 ### Fixed

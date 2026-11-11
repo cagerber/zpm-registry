@@ -466,6 +466,43 @@ ClassMethod DeletePackageVersion(pkg As %String, version As %String, channel As 
   Return $$$OK
 }
 
+/// Admin removal of ONE version in ONE channel, soft or hard, dry-run first.
+/// <ul>
+/// <li><var>dryRun</var> (default 1): change nothing, report what would happen.</li>
+/// <li><var>purge</var> (default 0): after the soft delete, also hard-purge the row
+/// (<method>PurgeDeleted</method>) so the version's bytes leave the registry. Without it the
+/// row is only flagged <code>deleted = 1</code> (the version number stays burned).</li>
+/// </ul>
+/// Works on a live row or one that is already soft-deleted (so a soft delete can be purged
+/// later). Never touches proxy (uplink) rows. Returns JSON:
+/// <code>{"name","channel","version","found","wasDeleted","dryRun","softDeleted","purged","bytes"}</code>.
+ClassMethod RemoveVersion(pkg As %String, version As %String, channel As %String, purge As %Boolean = 0, dryRun As %Boolean = 1, Output pStatus As %Status) As %String
+{
+  Set pStatus = $$$OK
+  Set out = {"name":(pkg), "channel":(channel), "version":(version), "found":0, "wasDeleted":0, "dryRun":(''dryRun), "purge":(''purge), "softDeleted":0, "purged":0, "bytes":0}
+  Set package = ..NameChannelVersionOpen(pkg, channel, version, , .tSC)
+  If ('$IsObject(package)) || (package.UpLink '= "") {
+    Return out.%ToJSON()
+  }
+  Set out.found = 1
+  Set out.wasDeleted = ''package.deleted
+  Set out.bytes = +package.size
+  Kill package
+  If dryRun Return out.%ToJSON()
+  If 'out.wasDeleted {
+    Set pStatus = ..DeletePackageVersion(pkg, version, channel)
+    If $$$ISERR(pStatus) Return out.%ToJSON()
+    Set out.softDeleted = 1
+  }
+  If purge {
+    Set report = {}.%FromJSON(..PurgeDeleted(0, 1, pkg, channel, .pStatus, version))
+    If $$$ISERR(pStatus) Return out.%ToJSON()
+    Set out.purged = report.purged
+    Set:report.bytes out.bytes = report.bytes
+  }
+  Return out.%ToJSON()
+}
+
 ClassMethod DeletePackage(pkg As %String, channel As %String) As %Status
 {
   &sql(DELETE FROM ZPM.Package WHERE name = :pkg AND channel = :channel)

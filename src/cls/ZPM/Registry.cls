@@ -43,6 +43,7 @@ XData UrlMap [ XMLNamespace = "http://www.intersystems.com/urlmap" ]
   <Route Url="/admin/status" Method="GET" Call="AdminStatus" Cors="true" />
   <Route Url="/admin/packages/:package/:version/keywords" Method="POST" Call="AdminSetKeywords" Cors="true" />
   <Route Url="/admin/packages" Method="POST" Call="AdminPublishPackage" Cors="true" />
+  <Route Url="/admin/packages" Method="GET" Call="AdminListPackages" Cors="true" />
   <Route Url="/admin/packages/:package/:version" Method="Delete" Call="AdminUnpublishPackageVersion" Cors="true" />
 
   <!-- Package Archive -->
@@ -347,6 +348,38 @@ ClassMethod AdminPublishPackage() As %Status
   Return ..%ProcessResult($$$OK, {"name": (name), "version": (version), "archive": (archivePath), "manifest": (manifestPath)})
 }
 
+/// Trifour admin: list direct-published versions (uplink/proxy rows are never listed).
+/// Query: <code>name</code>, <code>channel</code> (exact filters), <code>include_deleted=1</code>
+/// (soft-deleted rows too). Read-only. Returns
+/// <code>[{"name","channel","version","deleted","size"},...]</code>.
+ClassMethod AdminListPackages() As %Status
+{
+  Set tSC = ..CheckAdminToken()
+  If $$$ISERR(tSC) Return ..ReportHttpStatusCode(..#HTTP401UNAUTHORIZED, tSC)
+  Set sql = "SELECT name, channel, version, deleted, size FROM ZPM.Package WHERE UpLink IS NULL"
+  Set args = 0
+  Set name = $$$lcase(%request.Get("name"))
+  Set channel = %request.Get("channel")
+  If name '= "" Set sql = sql_" AND name = ?", args = args + 1, args(args) = name
+  If channel '= "" Set sql = sql_" AND channel = ?", args = args + 1, args(args) = channel
+  If '+%request.Get("include_deleted") Set sql = sql_" AND (deleted IS NULL OR deleted = 0)"
+  Set sql = sql_" ORDER BY name, channel, versionMajor, versionMinor, versionPatch, versionPrerelease"
+  Set rs = ##class(%SQL.Statement).%ExecDirect(, sql, args...)
+  If rs.%SQLCODE < 0 {
+    Return ..ReportHttpStatusCode(..#HTTP500INTERNALSERVERERROR, $$$ERROR($$$SQLError, rs.%SQLCODE, rs.%Message))
+  }
+  Set list = []
+  While rs.%Next() {
+    Do list.%Push({"name":(rs.name), "channel":(rs.channel), "version":(rs.version), "deleted":(''rs.deleted), "size":(+rs.size)})
+  }
+  Return ..%ProcessResult($$$OK, list)
+}
+
+/// Trifour admin: remove ONE version of ONE package in ONE channel.
+/// Query: <code>channel</code> (required), <code>purge=1</code> (hard-delete: bytes leave the
+/// registry; default is a soft delete), <code>dry_run=1</code> (report only). Needs
+/// <code>admin-token</code> and <code>delete-enabled: true</code>. Returns the
+/// <method>ZPM.Package.RemoveVersion</method> report.
 ClassMethod AdminUnpublishPackageVersion(pkg As %String = "", version As %String = "") As %Status
 {
   Set tSC = ..CheckAdminToken()
@@ -355,16 +388,20 @@ ClassMethod AdminUnpublishPackageVersion(pkg As %String = "", version As %String
   If ('settingsFile.GetDeleteEnable()) {
     Return ..ReportHttpStatusCode(..#HTTP403FORBIDDEN, $$$ERROR(5001,"Delete not allowed for this registry"))
   }
+  Set channel = %request.Get("channel")
+  If channel = "" {
+    Return ..ReportHttpStatusCode(..#HTTP400BADREQUEST, $$$ERROR(5001,"channel is required (?channel=incubating)"))
+  }
   Set pkg = $$$lcase(pkg)
-  Set pPackage = ##class(ZPM.Package).NameVersionOpen(pkg, version)
-  If ('$IsObject(pPackage)) {
+  Set dryRun = +%request.Get("dry_run")
+  Set report = {}.%FromJSON(##class(ZPM.Package).RemoveVersion(pkg, version, channel, +%request.Get("purge"), dryRun, .tSC))
+  If 'report.found {
     Return ..ReportHttpStatusCode(..#HTTP404NOTFOUND)
   }
-  Set tSC = ##class(ZPM.Package).DeletePackageVersion(pkg, version)
-  If tSC '= 1 {
-    Return ..ReportHttpStatusCode(..#HTTP500INTERNALSERVERERROR, $$$ERROR(5001,"delete failed for "_pkg_"@"_version))
+  If $$$ISERR(tSC) {
+    Return ..ReportHttpStatusCode(..#HTTP500INTERNALSERVERERROR, tSC)
   }
-  Return ..%ProcessResult($$$OK, {"deleted": (pkg _ "@" _ version)})
+  Return ..%ProcessResult($$$OK, report)
 }
 
 ClassMethod AdminSetKeywords(pkg As %String = "", version As %String = "") As %Status

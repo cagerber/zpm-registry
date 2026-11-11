@@ -26,6 +26,7 @@ Set tRoot = "/opt/registry"
 Set ^UnitTestRoot = tRoot_"/tests/cls"
 Do ##class(%SYSTEM.OBJ).Load(tRoot_"/tests/cls/ZPM/Tests/KeywordNormalization.cls","ck")
 Do ##class(%SYSTEM.OBJ).Load(tRoot_"/tests/cls/ZPM/Tests/DiskStreams.cls","ck")
+Do ##class(%SYSTEM.OBJ).Load(tRoot_"/tests/cls/ZPM/Tests/AdminRemoveVersion.cls","ck")
 Set sc = ##class(%UnitTest.Manager).RunTest("ZPM/Tests","/nodelete")
 Write !,"UNITSTATUS=",sc,!
 Halt
