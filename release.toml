@@ -1,0 +1,2 @@
+[tool.release.bump]
+targets = [{ path = "src/cls/ZPM/Registry.cls", strategy = "objectscript_version" }]
