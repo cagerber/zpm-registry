@@ -347,6 +347,7 @@ ClassMethod VersionFind(pkg As %String = "", version As %String = "", pPrereleas
         WHERE Name = :pkg 
           AND channel = :channel
           AND UpLink IS NULL
+          AND (deleted IS NULL OR deleted = 0)
           AND (
             versionPrerelease IS NULL 
             OR (:pSnapshot = 1 AND LOWER(versionPrerelease) = 'snapshot')
@@ -363,6 +364,7 @@ ClassMethod VersionFind(pkg As %String = "", version As %String = "", pPrereleas
       &sql(SELECT TOP 1 Version INTO :version FROM ZPM.Package 
           WHERE Name = :pkg 
             AND channel = :mirrorChannel
+            AND (deleted IS NULL OR deleted = 0)
             AND (
               versionPrerelease IS NULL 
               OR (:pSnapshot = 1 AND LOWER(versionPrerelease) = 'snapshot')
@@ -519,7 +521,7 @@ ClassMethod versionValidate(pkg As %String = "", version As %String = "", channe
     Return ""
   }
   If (version = "") || (version = "latest") || (version = "*") {
-    &sql(SELECT TOP 1 Version INTO :version FROM ZPM.Package WHERE Name = :pkg AND channel = :channel
+    &sql(SELECT TOP 1 Version INTO :version FROM ZPM.Package WHERE Name = :pkg AND channel = :channel AND (deleted IS NULL OR deleted = 0)
           ORDER BY versionMajor DESC, versionMinor DESC, versionPatch DESC, versionPrerelease DESC, versionBuildmetadata DESC
     )
     If SQLCODE'=0 Return ""
