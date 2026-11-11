@@ -10,6 +10,8 @@ Entries begin at 1.3.19 — earlier history predates this file.
 
 ## [Unreleased]
 
+## [1.3.23] - 2026-11-11
+
 ### Fixed
 
 - **A release now stamps `Registry.cls`.** The class declares its own `VERSION`, the bump did not touch it, and the pack refused ("refusing to pack as 1.3.22 — Registry.cls declares 1.3.21"), as it already had at 1.3.20. A `release.toml` now lists `src/cls/ZPM/Registry.cls` as a version copy, so every bump moves it. 1.3.22 itself is published from this fix.
